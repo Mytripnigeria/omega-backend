@@ -4,7 +4,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like, FindOptionsWhere } from 'typeorm';
-import { CategoryEntity } from './entities/category.entity';
+import { CategoryEntity, CategoryType } from './entities/category.entity';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { FilterCategoryDto } from './dto/filter-category.dto';
@@ -49,10 +49,11 @@ export class CategoriesService {
     businessId: string,
     query: FilterCategoryDto,
   ): Promise<PaginatedResponseDto<CategoryEntity>> {
-    const { page = 1, limit = 20, search, status } = query;
+    const { page = 1, limit = 20, search, status, type } = query;
     const where: FindOptionsWhere<CategoryEntity> = { businessId };
 
     if (status !== undefined) where.isActive = status;
+    if (type) where.type = type;
     if (search) where.name = Like(`%${search}%`);
 
     const [data, total] = await this.categoryRepo.findAndCount({
@@ -71,15 +72,31 @@ export class CategoriesService {
     return category;
   }
 
-  async getStats(businessId: string) {
-    const where: FindOptionsWhere<CategoryEntity> = { businessId };
+  async getStats(businessId: string, type?: CategoryType) {
+    const baseWhere: FindOptionsWhere<CategoryEntity> = { businessId };
+    if (type) baseWhere.type = type;
 
-    const [total, active] = await Promise.all([
-      this.categoryRepo.count({ where }),
-      this.categoryRepo.count({ where: { ...where, isActive: true } }),
+    const [total, active, byTypeRaw] = await Promise.all([
+      this.categoryRepo.count({ where: baseWhere }),
+      this.categoryRepo.count({ where: { ...baseWhere, isActive: true } }),
+      type
+        ? Promise.resolve([])
+        : this.categoryRepo
+            .createQueryBuilder('c')
+            .select('c.type', 'type')
+            .addSelect('COUNT(*)', 'count')
+            .where('c.businessId = :businessId', { businessId })
+            .groupBy('c.type')
+            .getRawMany<{ type: CategoryType; count: string }>(),
     ]);
 
-    return { total, active, inactive: total - active };
+    const byType = Object.values(CategoryType).reduce(
+      (acc, t) => ({ ...acc, [t]: 0 }),
+      {} as Record<CategoryType, number>,
+    );
+    for (const row of byTypeRaw) byType[row.type] = parseInt(row.count, 10);
+
+    return { total, active, inactive: total - active, byType };
   }
 
   async update(

@@ -135,6 +135,7 @@ export class StaffService {
       .createQueryBuilder('s')
       .addSelect('s.pin')
       .leftJoinAndSelect('s.role', 'role')
+      .leftJoinAndSelect('s.store', 'store')
       .where('s.staffCode = :staffCode', { staffCode })
       .getOne();
   }

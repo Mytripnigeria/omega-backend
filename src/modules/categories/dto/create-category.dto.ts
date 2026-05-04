@@ -1,8 +1,13 @@
-import { IsString, IsOptional, IsBoolean, IsNumber, IsArray, IsUUID } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsNumber, IsArray, IsUUID, IsEnum } from 'class-validator';
+import { CategoryType } from '../entities/category.entity';
 
 export class CreateCategoryDto {
   @IsString()
   name: string;
+
+  @IsOptional()
+  @IsEnum(CategoryType)
+  type?: CategoryType;
 
   @IsOptional()
   @IsString()

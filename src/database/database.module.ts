@@ -6,6 +6,7 @@ import { AdminEntity } from '../modules/admin/entities/admin.entity';
 import { BusinessEntity } from '../modules/business/entities/business.entity';
 import { BusinessSettingsEntity } from '../modules/business/entities/business-settings.entity';
 import { StoreEntity } from '../modules/store/entities/store.entity';
+import { CategoryEntity } from '../modules/categories/entities/category.entity';
 
 @Module({
   imports: [
@@ -24,7 +25,13 @@ import { StoreEntity } from '../modules/store/entities/store.entity';
         autoLoadEntities: true,
       }),
     }),
-    TypeOrmModule.forFeature([AdminEntity, BusinessEntity, BusinessSettingsEntity, StoreEntity]),
+    TypeOrmModule.forFeature([
+      AdminEntity,
+      BusinessEntity,
+      BusinessSettingsEntity,
+      StoreEntity,
+      CategoryEntity,
+    ]),
   ],
   providers: [SeedService],
 })

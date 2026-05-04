@@ -9,14 +9,25 @@ import {
   Unique,
 } from 'typeorm';
 
+export enum CategoryType {
+  MENU = 'menu',
+  INVENTORY = 'inventory',
+  EXPENSE = 'expense',
+  EQUIPMENT = 'equipment',
+}
+
 @Entity('categories')
-@Unique(['businessId', 'name'])
+@Unique(['businessId', 'type', 'name'])
+@Index(['businessId', 'type'])
 export class CategoryEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
   @Column()
   name: string;
+
+  @Column({ type: 'enum', enum: CategoryType, default: CategoryType.MENU })
+  type: CategoryType;
 
   @Column({ nullable: true })
   emoji: string;

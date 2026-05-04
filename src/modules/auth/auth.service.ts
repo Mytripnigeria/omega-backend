@@ -136,11 +136,16 @@ export class AuthService {
     if (!isValid) throw new UnauthorizedException('Invalid credentials');
 
     const permissions = staff.role?.permissions ?? [];
+    const businessId = staff.store?.businessId;
+    if (!businessId) {
+      throw new UnauthorizedException('Staff is not assigned to a store');
+    }
 
     const payload: StaffJwtPayload = {
       sub: staff.id,
       sub_type: 'staff',
       staffCode: staff.staffCode,
+      businessId,
       storeId: staff.storeId,
       roleId: staff.roleId,
       permissions,
@@ -161,6 +166,7 @@ export class AuthService {
         lastName: staff.lastName,
         roleId: staff.roleId,
         roleName: staff.role?.name ?? '',
+        businessId,
         storeId: staff.storeId,
         permissions,
       },

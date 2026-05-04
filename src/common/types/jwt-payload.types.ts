@@ -10,6 +10,7 @@ export interface StaffJwtPayload {
   sub: string;
   sub_type: 'staff';
   staffCode: string;
+  businessId: string;
   storeId: string;
   roleId: string;
   permissions: string[];

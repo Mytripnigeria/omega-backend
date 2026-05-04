@@ -17,39 +17,50 @@ import { UpdateCategoryDto } from './dto/update-category.dto';
 import { FilterCategoryDto } from './dto/filter-category.dto';
 import { ReorderCategoriesDto } from './dto/reorder-category.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { JwtOrStaffGuard } from '../../common/guards/jwt-or-staff.guard';
 import { BusinessId } from '../../common/decorators/business-id.decorator';
+import { BusinessContext } from '../../common/decorators/business-context.decorator';
+import { CategoryType } from './entities/category.entity';
 
-@UseGuards(JwtAuthGuard)
 @Controller('categories')
 export class CategoriesController {
   constructor(private readonly categoriesService: CategoriesService) {}
 
+  @UseGuards(JwtAuthGuard)
   @Post()
   create(@BusinessId() businessId: string, @Body() dto: CreateCategoryDto) {
     return this.categoriesService.create(businessId, dto);
   }
 
+  @UseGuards(JwtOrStaffGuard)
   @Get()
-  findAll(@BusinessId() businessId: string, @Query() query: FilterCategoryDto) {
+  findAll(@BusinessContext() businessId: string, @Query() query: FilterCategoryDto) {
     return this.categoriesService.findAll(businessId, query);
   }
 
+  @UseGuards(JwtOrStaffGuard)
   @Get('stats')
-  getStats(@BusinessId() businessId: string) {
-    return this.categoriesService.getStats(businessId);
+  getStats(
+    @BusinessContext() businessId: string,
+    @Query('type') type?: CategoryType,
+  ) {
+    return this.categoriesService.getStats(businessId, type);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Patch('reorder')
   @HttpCode(HttpStatus.NO_CONTENT)
   reorder(@BusinessId() businessId: string, @Body() dto: ReorderCategoriesDto) {
     return this.categoriesService.reorder(businessId, dto);
   }
 
+  @UseGuards(JwtOrStaffGuard)
   @Get(':id')
-  findOne(@BusinessId() businessId: string, @Param('id') id: string) {
+  findOne(@BusinessContext() businessId: string, @Param('id') id: string) {
     return this.categoriesService.findOne(businessId, id);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Patch(':id')
   update(
     @BusinessId() businessId: string,
@@ -59,6 +70,7 @@ export class CategoriesController {
     return this.categoriesService.update(businessId, id, dto);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@BusinessId() businessId: string, @Param('id') id: string) {

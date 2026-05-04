@@ -6,6 +6,39 @@ import { BusinessEntity } from '../modules/business/entities/business.entity';
 import { BusinessSettingsEntity } from '../modules/business/entities/business-settings.entity';
 import { AdminEntity } from '../modules/admin/entities/admin.entity';
 import { StoreEntity, WeeklyHours } from '../modules/store/entities/store.entity';
+import { CategoryEntity, CategoryType } from '../modules/categories/entities/category.entity';
+
+const STARTER_CATEGORIES: Array<{
+  type: CategoryType;
+  name: string;
+  emoji: string;
+  order: number;
+}> = [
+  { type: CategoryType.MENU, name: 'Popular', emoji: '🔥', order: 0 },
+  { type: CategoryType.MENU, name: 'Starters', emoji: '🥗', order: 1 },
+  { type: CategoryType.MENU, name: 'Mains', emoji: '🍽️', order: 2 },
+  { type: CategoryType.MENU, name: 'Sides', emoji: '🍟', order: 3 },
+  { type: CategoryType.MENU, name: 'Drinks', emoji: '🧃', order: 4 },
+  { type: CategoryType.MENU, name: 'Desserts', emoji: '🍰', order: 5 },
+
+  { type: CategoryType.INVENTORY, name: 'Produce', emoji: '🥬', order: 0 },
+  { type: CategoryType.INVENTORY, name: 'Meat', emoji: '🥩', order: 1 },
+  { type: CategoryType.INVENTORY, name: 'Seafood', emoji: '🐟', order: 2 },
+  { type: CategoryType.INVENTORY, name: 'Grains', emoji: '🌾', order: 3 },
+  { type: CategoryType.INVENTORY, name: 'Oil', emoji: '🛢️', order: 4 },
+  { type: CategoryType.INVENTORY, name: 'Spices', emoji: '🌶️', order: 5 },
+
+  { type: CategoryType.EXPENSE, name: 'Supplies', emoji: '📦', order: 0 },
+  { type: CategoryType.EXPENSE, name: 'Transport', emoji: '🚚', order: 1 },
+  { type: CategoryType.EXPENSE, name: 'Maintenance', emoji: '🛠️', order: 2 },
+  { type: CategoryType.EXPENSE, name: 'Utilities', emoji: '💡', order: 3 },
+  { type: CategoryType.EXPENSE, name: 'Miscellaneous', emoji: '📁', order: 4 },
+
+  { type: CategoryType.EQUIPMENT, name: 'Refrigeration', emoji: '🧊', order: 0 },
+  { type: CategoryType.EQUIPMENT, name: 'Cooking', emoji: '🔥', order: 1 },
+  { type: CategoryType.EQUIPMENT, name: 'Processing', emoji: '⚙️', order: 2 },
+  { type: CategoryType.EQUIPMENT, name: 'Electronics', emoji: '📟', order: 3 },
+];
 
 const DEFAULT_HOURS: WeeklyHours = {
   monday: { open: '09:00', close: '21:00', closed: false },
@@ -35,15 +68,19 @@ export class SeedService implements OnModuleInit {
     private readonly dataSource: DataSource,
     @InjectRepository(AdminEntity)
     private readonly adminRepo: Repository<AdminEntity>,
+    @InjectRepository(BusinessEntity)
+    private readonly businessRepo: Repository<BusinessEntity>,
   ) {}
 
   async onModuleInit() {
     const enabled = this.configService.get<string>('SEED_ON_BOOT') ?? process.env.SEED_ON_BOOT;
     if (enabled === 'false') return;
 
+    await this.seedCategoriesForExistingBusinesses();
+
     const existing = await this.adminRepo.count();
     if (existing > 0) {
-      this.logger.log(`Skipping seed — ${existing} admin(s) already exist`);
+      this.logger.log(`Skipping initial seed — ${existing} admin(s) already exist`);
       return;
     }
 
@@ -130,8 +167,40 @@ export class SeedService implements OnModuleInit {
           : '(set via SEED_ADMIN_PASSWORD)',
       );
       this.logger.log('=================================================================');
+      await this.seedCategoriesForBusiness(this.dataSource, await this.firstBusinessId());
     } catch (err) {
       this.logger.error(`Seed failed: ${(err as Error).message}`, (err as Error).stack);
     }
+  }
+
+  private async firstBusinessId(): Promise<string | null> {
+    const business = await this.businessRepo.findOne({ where: {}, order: { createdAt: 'ASC' } });
+    return business?.id ?? null;
+  }
+
+  /**
+   * Seeds starter categories for any business that has none. Idempotent — safe
+   * to run on every boot. Inserts ignore duplicates via the (businessId, type, name)
+   * unique constraint.
+   */
+  private async seedCategoriesForExistingBusinesses(): Promise<void> {
+    const businesses = await this.businessRepo.find({ select: ['id', 'name'] });
+    for (const b of businesses) {
+      await this.seedCategoriesForBusiness(this.dataSource, b.id);
+    }
+  }
+
+  private async seedCategoriesForBusiness(
+    ds: DataSource,
+    businessId: string | null,
+  ): Promise<void> {
+    if (!businessId) return;
+    const repo = ds.getRepository(CategoryEntity);
+    const existing = await repo.count({ where: { businessId } });
+    if (existing > 0) return;
+
+    const rows = STARTER_CATEGORIES.map((c) => repo.create({ ...c, businessId }));
+    await repo.save(rows);
+    this.logger.log(`Seeded ${rows.length} starter categories for business ${businessId}`);
   }
 }
