@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
@@ -13,6 +14,10 @@ import * as bcrypt from 'bcrypt';
 export class AdminEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  @Column({ type: 'uuid' })
+  @Index()
+  businessId: string;
 
   @Column()
   fullName: string;
@@ -34,6 +39,15 @@ export class AdminEntity {
 
   @Column({ nullable: true, select: false })
   refreshToken: string;
+
+  @Column({ default: false })
+  twoFactorEnabled: boolean;
+
+  @Column({ nullable: true, select: false })
+  twoFactorSecret: string;
+
+  @Column({ type: 'simple-array', nullable: true, select: false })
+  twoFactorBackupCodes: string[];
 
   @Column({ default: true })
   isActive: boolean;

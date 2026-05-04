@@ -30,9 +30,6 @@ export class CreateAddOnGroupDto {
   @IsBoolean()
   status?: boolean;
 
-  @IsString()
-  storeId: string;
-
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })

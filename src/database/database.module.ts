@@ -1,6 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { SeedService } from './seed.service';
+import { AdminEntity } from '../modules/admin/entities/admin.entity';
+import { BusinessEntity } from '../modules/business/entities/business.entity';
+import { BusinessSettingsEntity } from '../modules/business/entities/business-settings.entity';
+import { StoreEntity } from '../modules/store/entities/store.entity';
 
 @Module({
   imports: [
@@ -19,6 +24,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
         autoLoadEntities: true,
       }),
     }),
+    TypeOrmModule.forFeature([AdminEntity, BusinessEntity, BusinessSettingsEntity, StoreEntity]),
   ],
+  providers: [SeedService],
 })
 export class DatabaseModule {}

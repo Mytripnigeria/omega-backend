@@ -5,13 +5,14 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
+  Index,
   OneToMany,
   Unique,
 } from 'typeorm';
 import { VariationOptionEntity } from './variation-option.entity';
 
 @Entity('variation_groups')
-@Unique(['storeId', 'name'])
+@Unique(['businessId', 'name'])
 export class VariationGroupEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -22,8 +23,9 @@ export class VariationGroupEntity {
   @Column({ default: true })
   isActive: boolean;
 
-  @Column()
-  storeId: string;
+  @Column({ type: 'uuid' })
+  @Index()
+  businessId: string;
 
   @OneToMany(() => VariationOptionEntity, (opt) => opt.variationGroup, {
     cascade: true,

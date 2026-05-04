@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -15,6 +17,7 @@ import { StoreService } from './store.service';
 import { CreateStoreDto } from './dto/create-store.dto';
 import { UpdateStoreDto } from './dto/update-store.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
+import { BusinessId } from '../../common/decorators/business-id.decorator';
 
 @ApiTags('stores')
 @ApiBearerAuth()
@@ -24,27 +27,32 @@ export class StoreController {
   constructor(private readonly storeService: StoreService) {}
 
   @Post()
-  create(@Body() dto: CreateStoreDto) {
-    return this.storeService.create(dto);
+  create(@BusinessId() businessId: string, @Body() dto: CreateStoreDto) {
+    return this.storeService.create(businessId, dto);
   }
 
   @Get()
-  findAll(@Query() query: PaginationQueryDto) {
-    return this.storeService.findAll(query);
+  findAll(@BusinessId() businessId: string, @Query() query: PaginationQueryDto) {
+    return this.storeService.findAll(businessId, query);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.storeService.findOne(id);
+  findOne(@BusinessId() businessId: string, @Param('id') id: string) {
+    return this.storeService.findOne(businessId, id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateStoreDto) {
-    return this.storeService.update(id, dto);
+  update(
+    @BusinessId() businessId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateStoreDto,
+  ) {
+    return this.storeService.update(businessId, id, dto);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.storeService.remove(id);
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@BusinessId() businessId: string, @Param('id') id: string) {
+    return this.storeService.remove(businessId, id);
   }
 }

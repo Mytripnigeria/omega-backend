@@ -16,6 +16,13 @@ import { AddOnGroupsModule } from './modules/addon-groups/addon-groups.module';
 import { ProductsModule } from './modules/products/products.module';
 import { CombosModule } from './modules/combos/combos.module';
 import { StorageModule } from './modules/storage/storage.module';
+import { BusinessModule } from './modules/business/business.module';
+import { TaxRatesModule } from './modules/tax-rates/tax-rates.module';
+import { PaymentMethodsModule } from './modules/payment-methods/payment-methods.module';
+import { PrintersModule } from './modules/printers/printers.module';
+import { WebhooksModule } from './modules/webhooks/webhooks.module';
+import { DomainsModule } from './modules/domains/domains.module';
+import { NotificationPreferencesModule } from './modules/notification-preferences/notification-preferences.module';
 
 @Module({
   imports: [
@@ -25,6 +32,7 @@ import { StorageModule } from './modules/storage/storage.module';
       envFilePath: '.env',
     }),
     DatabaseModule,
+    BusinessModule,
     AuthModule,
     StoreModule,
     AdminModule,
@@ -39,6 +47,12 @@ import { StorageModule } from './modules/storage/storage.module';
     ProductsModule,
     CombosModule,
     StorageModule,
+    TaxRatesModule,
+    PaymentMethodsModule,
+    PrintersModule,
+    WebhooksModule,
+    DomainsModule,
+    NotificationPreferencesModule,
   ],
 })
 export class AppModule {}

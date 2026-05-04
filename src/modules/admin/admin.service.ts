@@ -4,26 +4,59 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AdminEntity } from './entities/admin.entity';
 import { CreateAdminDto } from './dto/create-admin.dto';
+import { BusinessEntity } from '../business/entities/business.entity';
+
+type SafeAdmin = Omit<
+  AdminEntity,
+  'password' | 'refreshToken' | 'twoFactorSecret' | 'twoFactorBackupCodes' | 'hashPassword'
+>;
 
 @Injectable()
 export class AdminService {
   constructor(
     @InjectRepository(AdminEntity)
     private readonly adminRepo: Repository<AdminEntity>,
+    @InjectRepository(BusinessEntity)
+    private readonly businessRepo: Repository<BusinessEntity>,
+    private readonly dataSource: DataSource,
   ) {}
 
-  async create(dto: CreateAdminDto): Promise<Omit<AdminEntity, 'password' | 'refreshToken' | 'hashPassword'>> {
+  async create(dto: CreateAdminDto): Promise<SafeAdmin> {
     const existing = await this.adminRepo.findOne({ where: { email: dto.email } });
     if (existing) throw new ConflictException('Email already in use');
 
-    const admin = this.adminRepo.create(dto);
-    const saved = await this.adminRepo.save(admin);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { password, refreshToken, hashPassword, ...result } = saved;
-    return result;
+    return this.dataSource.transaction(async (manager) => {
+      const businessRepo = manager.getRepository(BusinessEntity);
+      const adminRepo = manager.getRepository(AdminEntity);
+
+      // Each new admin gets their own business in v1.
+      // Multi-admin-per-business invitations come via the team invite flow (separate path).
+      const business = businessRepo.create({
+        name: dto.fullName ? `${dto.fullName}'s Business` : 'My Business',
+      });
+      const savedBusiness = await businessRepo.save(business);
+
+      const admin = adminRepo.create({ ...dto, businessId: savedBusiness.id });
+      const saved = await adminRepo.save(admin);
+
+      const {
+        password,
+        refreshToken,
+        twoFactorSecret,
+        twoFactorBackupCodes,
+        hashPassword,
+        ...result
+      } = saved;
+      void password;
+      void refreshToken;
+      void twoFactorSecret;
+      void twoFactorBackupCodes;
+      void hashPassword;
+      return result as SafeAdmin;
+    });
   }
 
   async findByEmail(email: string): Promise<AdminEntity | null> {
@@ -41,6 +74,16 @@ export class AdminService {
     return admin;
   }
 
+  async findByIdWithSecrets(id: string): Promise<AdminEntity | null> {
+    return this.adminRepo
+      .createQueryBuilder('a')
+      .addSelect('a.password')
+      .addSelect('a.twoFactorSecret')
+      .addSelect('a.twoFactorBackupCodes')
+      .where('a.id = :id', { id })
+      .getOne();
+  }
+
   async updateRefreshToken(id: string, hashedToken: string | null): Promise<void> {
     await this.adminRepo.update(id, { refreshToken: hashedToken ?? undefined });
   }
@@ -51,5 +94,29 @@ export class AdminService {
       .addSelect('a.refreshToken')
       .where('a.id = :id', { id })
       .getOne();
+  }
+
+  async listByBusiness(businessId: string): Promise<AdminEntity[]> {
+    return this.adminRepo.find({
+      where: { businessId },
+      order: { createdAt: 'ASC' },
+    });
+  }
+
+  async updatePassword(id: string, newHash: string): Promise<void> {
+    await this.adminRepo.update(id, { password: newHash });
+  }
+
+  async setTwoFactor(
+    id: string,
+    secret: string | null,
+    enabled: boolean,
+    backupCodes: string[] | null,
+  ): Promise<void> {
+    await this.adminRepo.update(id, {
+      twoFactorSecret: secret as string,
+      twoFactorEnabled: enabled,
+      twoFactorBackupCodes: backupCodes as string[],
+    });
   }
 }

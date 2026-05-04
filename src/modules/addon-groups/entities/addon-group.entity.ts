@@ -5,13 +5,14 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
+  Index,
   OneToMany,
   Unique,
 } from 'typeorm';
 import { AddOnEntity } from './addon.entity';
 
 @Entity('addon_groups')
-@Unique(['storeId', 'name'])
+@Unique(['businessId', 'name'])
 export class AddOnGroupEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -28,8 +29,9 @@ export class AddOnGroupEntity {
   @Column({ default: true })
   status: boolean;
 
-  @Column()
-  storeId: string;
+  @Column({ type: 'uuid' })
+  @Index()
+  businessId: string;
 
   @OneToMany(() => AddOnEntity, (addon) => addon.addOnGroup, {
     cascade: true,

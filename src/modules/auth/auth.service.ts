@@ -37,6 +37,7 @@ export class AuthService {
       sub: admin.id,
       sub_type: 'admin',
       email: admin.email,
+      businessId: admin.businessId,
     };
 
     const accessToken = this.jwtService.sign(payload, {
@@ -60,10 +61,12 @@ export class AuthService {
       refreshToken,
       admin: {
         id: admin.id,
+        businessId: admin.businessId,
         fullName: admin.fullName,
         email: admin.email,
         role: admin.role,
         avatarUrl: admin.avatarUrl,
+        twoFactorEnabled: admin.twoFactorEnabled,
       },
     };
   }
@@ -88,6 +91,7 @@ export class AuthService {
       sub: admin.id,
       sub_type: 'admin',
       email: admin.email,
+      businessId: admin.businessId,
     };
 
     const accessToken = this.jwtService.sign(newPayload, {

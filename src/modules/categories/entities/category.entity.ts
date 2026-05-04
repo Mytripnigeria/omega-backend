@@ -5,12 +5,12 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
-  OneToMany,
+  Index,
   Unique,
 } from 'typeorm';
 
 @Entity('categories')
-@Unique(['storeId', 'name'])
+@Unique(['businessId', 'name'])
 export class CategoryEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -39,8 +39,9 @@ export class CategoryEntity {
   @Column('simple-array', { nullable: true })
   visibility: string[];
 
-  @Column()
-  storeId: string;
+  @Column({ type: 'uuid' })
+  @Index()
+  businessId: string;
 
   @CreateDateColumn()
   createdAt: Date;

@@ -17,20 +17,22 @@ export class VariationGroupsService {
     private readonly optionRepo: Repository<VariationOptionEntity>,
   ) {}
 
-  async create(dto: CreateVariationGroupDto): Promise<VariationGroupEntity> {
+  async create(businessId: string, dto: CreateVariationGroupDto): Promise<VariationGroupEntity> {
     const { options, ...groupData } = dto;
-    const group = this.groupRepo.create(groupData);
+    const group = this.groupRepo.create({ ...groupData, businessId });
     if (options?.length) {
       group.options = options.map((o) => this.optionRepo.create(o));
     }
     return this.groupRepo.save(group);
   }
 
-  async findAll(query: FilterVariationGroupDto): Promise<PaginatedResponseDto<VariationGroupEntity>> {
-    const { page = 1, limit = 20, storeId, search } = query;
-    const where: FindOptionsWhere<VariationGroupEntity> = {};
+  async findAll(
+    businessId: string,
+    query: FilterVariationGroupDto,
+  ): Promise<PaginatedResponseDto<VariationGroupEntity>> {
+    const { page = 1, limit = 20, search } = query;
+    const where: FindOptionsWhere<VariationGroupEntity> = { businessId };
 
-    if (storeId) where.storeId = storeId;
     if (search) where.name = Like(`%${search}%`);
 
     const [data, total] = await this.groupRepo.findAndCount({
@@ -44,30 +46,30 @@ export class VariationGroupsService {
     return PaginatedResponseDto.of(data, total, page, limit);
   }
 
-  async findOne(id: string): Promise<VariationGroupEntity> {
+  async findOne(businessId: string, id: string): Promise<VariationGroupEntity> {
     const group = await this.groupRepo.findOne({
-      where: { id },
+      where: { id, businessId },
       relations: ['options'],
     });
     if (!group) throw new NotFoundException(`Variation group ${id} not found`);
     return group;
   }
 
-  async getStats(storeId?: string) {
-    const where: FindOptionsWhere<VariationGroupEntity> = {};
-    if (storeId) where.storeId = storeId;
-
+  async getStats(businessId: string) {
     const groups = await this.groupRepo.find({
-      where,
+      where: { businessId },
       relations: ['options'],
     });
     const totalOptions = groups.reduce((sum, g) => sum + (g.options?.length ?? 0), 0);
-
     return { groups: groups.length, totalOptions };
   }
 
-  async update(id: string, dto: UpdateVariationGroupDto): Promise<VariationGroupEntity> {
-    const group = await this.findOne(id);
+  async update(
+    businessId: string,
+    id: string,
+    dto: UpdateVariationGroupDto,
+  ): Promise<VariationGroupEntity> {
+    const group = await this.findOne(businessId, id);
     const { options, ...groupData } = dto;
     Object.assign(group, groupData);
 
@@ -79,8 +81,8 @@ export class VariationGroupsService {
     return this.groupRepo.save(group);
   }
 
-  async remove(id: string): Promise<void> {
-    await this.findOne(id);
+  async remove(businessId: string, id: string): Promise<void> {
+    await this.findOne(businessId, id);
     await this.groupRepo.softDelete(id);
   }
 }

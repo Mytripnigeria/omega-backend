@@ -2,6 +2,8 @@ export interface AdminJwtPayload {
   sub: string;
   sub_type: 'admin';
   email: string;
+  businessId: string;
+  sessionId?: string;
 }
 
 export interface StaffJwtPayload {

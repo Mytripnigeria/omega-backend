@@ -32,7 +32,4 @@ export class CreateCategoryDto {
   @IsArray()
   @IsString({ each: true })
   visibility?: string[];
-
-  @IsString()
-  storeId: string;
 }

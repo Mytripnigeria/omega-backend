@@ -1,18 +1,35 @@
 import {
   Column,
   CreateDateColumn,
+  DeleteDateColumn,
   Entity,
-  OneToMany,
+  Index,
   PrimaryGeneratedColumn,
+  Unique,
   UpdateDateColumn,
 } from 'typeorm';
 
+export interface DayHours {
+  open: string;  // 'HH:MM'
+  close: string; // 'HH:MM'
+  closed: boolean;
+}
+
+export type WeeklyHours = {
+  [day in 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday']: DayHours;
+};
+
 @Entity('stores')
+@Unique(['businessId', 'name'])
 export class StoreEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ unique: true })
+  @Column({ type: 'uuid' })
+  @Index()
+  businessId: string;
+
+  @Column()
   name: string;
 
   @Column()
@@ -36,6 +53,15 @@ export class StoreEntity {
   @Column({ nullable: true })
   description: string;
 
+  @Column({ default: 'Africa/Lagos' })
+  timezone: string;
+
+  @Column({ type: 'jsonb', nullable: true })
+  openingHours: WeeklyHours | null;
+
+  @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
+  deliveryRadiusKm: number | null;
+
   @Column({ default: true })
   isActive: boolean;
 
@@ -44,4 +70,7 @@ export class StoreEntity {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @DeleteDateColumn()
+  deletedAt: Date;
 }

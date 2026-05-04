@@ -14,9 +14,6 @@ export class CreateVariationGroupDto {
   @IsBoolean()
   isActive?: boolean;
 
-  @IsString()
-  storeId: string;
-
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })

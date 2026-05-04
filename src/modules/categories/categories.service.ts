@@ -1,7 +1,6 @@
 import {
   Injectable,
   NotFoundException,
-  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like, FindOptionsWhere } from 'typeorm';
@@ -39,18 +38,20 @@ export class CategoriesService {
     }
   }
 
-  async create(dto: CreateCategoryDto): Promise<CategoryEntity> {
+  async create(businessId: string, dto: CreateCategoryDto): Promise<CategoryEntity> {
     const { imageFileId, imageUrl, ...rest } = dto;
-    const category = this.categoryRepo.create(rest);
+    const category = this.categoryRepo.create({ ...rest, businessId });
     await this.resolveImageFields(category, { imageFileId, imageUrl });
     return this.categoryRepo.save(category);
   }
 
-  async findAll(query: FilterCategoryDto): Promise<PaginatedResponseDto<CategoryEntity>> {
-    const { page = 1, limit = 20, storeId, search, status } = query;
-    const where: FindOptionsWhere<CategoryEntity> = {};
+  async findAll(
+    businessId: string,
+    query: FilterCategoryDto,
+  ): Promise<PaginatedResponseDto<CategoryEntity>> {
+    const { page = 1, limit = 20, search, status } = query;
+    const where: FindOptionsWhere<CategoryEntity> = { businessId };
 
-    if (storeId) where.storeId = storeId;
     if (status !== undefined) where.isActive = status;
     if (search) where.name = Like(`%${search}%`);
 
@@ -64,15 +65,14 @@ export class CategoriesService {
     return PaginatedResponseDto.of(data, total, page, limit);
   }
 
-  async findOne(id: string): Promise<CategoryEntity> {
-    const category = await this.categoryRepo.findOne({ where: { id } });
+  async findOne(businessId: string, id: string): Promise<CategoryEntity> {
+    const category = await this.categoryRepo.findOne({ where: { id, businessId } });
     if (!category) throw new NotFoundException(`Category ${id} not found`);
     return category;
   }
 
-  async getStats(storeId?: string) {
-    const where: FindOptionsWhere<CategoryEntity> = {};
-    if (storeId) where.storeId = storeId;
+  async getStats(businessId: string) {
+    const where: FindOptionsWhere<CategoryEntity> = { businessId };
 
     const [total, active] = await Promise.all([
       this.categoryRepo.count({ where }),
@@ -82,24 +82,35 @@ export class CategoriesService {
     return { total, active, inactive: total - active };
   }
 
-  async update(id: string, dto: UpdateCategoryDto): Promise<CategoryEntity> {
-    const category = await this.findOne(id);
+  async update(
+    businessId: string,
+    id: string,
+    dto: UpdateCategoryDto,
+  ): Promise<CategoryEntity> {
+    const category = await this.findOne(businessId, id);
     const { imageFileId, imageUrl, ...rest } = dto;
     Object.assign(category, rest);
     await this.resolveImageFields(category, { imageFileId, imageUrl });
     return this.categoryRepo.save(category);
   }
 
-  async remove(id: string): Promise<void> {
-    await this.findOne(id);
+  async remove(businessId: string, id: string): Promise<void> {
+    await this.findOne(businessId, id);
     await this.categoryRepo.softDelete(id);
   }
 
-  async reorder(dto: ReorderCategoriesDto): Promise<void> {
+  async reorder(businessId: string, dto: ReorderCategoriesDto): Promise<void> {
+    // Verify all referenced categories belong to this business before reordering.
+    const ids = dto.items.map((it) => it.id);
+    if (ids.length === 0) return;
+    const found = await this.categoryRepo.count({
+      where: ids.map((id) => ({ id, businessId })),
+    });
+    if (found !== ids.length) {
+      throw new NotFoundException('One or more categories not found in your business');
+    }
     await Promise.all(
-      dto.items.map(({ id, order }) =>
-        this.categoryRepo.update(id, { order }),
-      ),
+      dto.items.map(({ id, order }) => this.categoryRepo.update(id, { order })),
     );
   }
 }

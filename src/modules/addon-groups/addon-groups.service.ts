@@ -17,21 +17,23 @@ export class AddOnGroupsService {
     private readonly addonRepo: Repository<AddOnEntity>,
   ) {}
 
-  async create(dto: CreateAddOnGroupDto): Promise<AddOnGroupEntity> {
+  async create(businessId: string, dto: CreateAddOnGroupDto): Promise<AddOnGroupEntity> {
     const { addons, ...groupData } = dto;
     this.validateSelection(groupData.minSelection, groupData.maxSelection, addons?.length ?? 0);
-    const group = this.groupRepo.create(groupData);
+    const group = this.groupRepo.create({ ...groupData, businessId });
     if (addons?.length) {
       group.addons = addons.map((a) => this.addonRepo.create(a));
     }
     return this.groupRepo.save(group);
   }
 
-  async findAll(query: FilterAddOnGroupDto): Promise<PaginatedResponseDto<AddOnGroupEntity>> {
-    const { page = 1, limit = 20, storeId, search } = query;
-    const where: FindOptionsWhere<AddOnGroupEntity> = {};
+  async findAll(
+    businessId: string,
+    query: FilterAddOnGroupDto,
+  ): Promise<PaginatedResponseDto<AddOnGroupEntity>> {
+    const { page = 1, limit = 20, search } = query;
+    const where: FindOptionsWhere<AddOnGroupEntity> = { businessId };
 
-    if (storeId) where.storeId = storeId;
     if (search) where.name = Like(`%${search}%`);
 
     const [data, total] = await this.groupRepo.findAndCount({
@@ -45,20 +47,20 @@ export class AddOnGroupsService {
     return PaginatedResponseDto.of(data, total, page, limit);
   }
 
-  async findOne(id: string): Promise<AddOnGroupEntity> {
+  async findOne(businessId: string, id: string): Promise<AddOnGroupEntity> {
     const group = await this.groupRepo.findOne({
-      where: { id },
+      where: { id, businessId },
       relations: ['addons'],
     });
     if (!group) throw new NotFoundException(`Add-on group ${id} not found`);
     return group;
   }
 
-  async getStats(storeId?: string) {
-    const where: FindOptionsWhere<AddOnGroupEntity> = {};
-    if (storeId) where.storeId = storeId;
-
-    const groups = await this.groupRepo.find({ where, relations: ['addons'] });
+  async getStats(businessId: string) {
+    const groups = await this.groupRepo.find({
+      where: { businessId },
+      relations: ['addons'],
+    });
     const totalAddons = groups.reduce((sum, g) => sum + (g.addons?.length ?? 0), 0);
     const availableAddons = groups.reduce(
       (sum, g) => sum + (g.addons?.filter((a) => a.isAvailable).length ?? 0),
@@ -68,36 +70,52 @@ export class AddOnGroupsService {
     return { totalGroups: groups.length, totalAddons, availableAddons };
   }
 
-  async update(id: string, dto: UpdateAddOnGroupDto): Promise<AddOnGroupEntity> {
-    const group = await this.findOne(id);
+  async update(
+    businessId: string,
+    id: string,
+    dto: UpdateAddOnGroupDto,
+  ): Promise<AddOnGroupEntity> {
+    const group = await this.findOne(businessId, id);
     Object.assign(group, dto);
     this.validateSelection(group.minSelection, group.maxSelection, group.addons?.length ?? 0);
     return this.groupRepo.save(group);
   }
 
-  async remove(id: string): Promise<void> {
-    await this.findOne(id);
+  async remove(businessId: string, id: string): Promise<void> {
+    await this.findOne(businessId, id);
     await this.groupRepo.softDelete(id);
   }
 
-  async addAddon(groupId: string, dto: CreateAddOnDto): Promise<AddOnEntity> {
-    await this.findOne(groupId);
+  async addAddon(businessId: string, groupId: string, dto: CreateAddOnDto): Promise<AddOnEntity> {
+    await this.findOne(businessId, groupId);
     const addon = this.addonRepo.create({ ...dto, addOnGroupId: groupId });
     return this.addonRepo.save(addon);
   }
 
-  async updateAddon(groupId: string, addonId: string, dto: UpdateAddOnDto): Promise<AddOnEntity> {
+  async updateAddon(
+    businessId: string,
+    groupId: string,
+    addonId: string,
+    dto: UpdateAddOnDto,
+  ): Promise<AddOnEntity> {
+    await this.findOne(businessId, groupId);
     const addon = await this.findAddon(groupId, addonId);
     Object.assign(addon, dto);
     return this.addonRepo.save(addon);
   }
 
-  async removeAddon(groupId: string, addonId: string): Promise<void> {
+  async removeAddon(businessId: string, groupId: string, addonId: string): Promise<void> {
+    await this.findOne(businessId, groupId);
     const addon = await this.findAddon(groupId, addonId);
     await this.addonRepo.remove(addon);
   }
 
-  async toggleAvailability(groupId: string, addonId: string): Promise<AddOnEntity> {
+  async toggleAvailability(
+    businessId: string,
+    groupId: string,
+    addonId: string,
+  ): Promise<AddOnEntity> {
+    await this.findOne(businessId, groupId);
     const addon = await this.findAddon(groupId, addonId);
     addon.isAvailable = !addon.isAvailable;
     return this.addonRepo.save(addon);
@@ -111,7 +129,11 @@ export class AddOnGroupsService {
     return addon;
   }
 
-  private validateSelection(min: number | null | undefined, max: number | null | undefined, addonsCount: number): void {
+  private validateSelection(
+    min: number | null | undefined,
+    max: number | null | undefined,
+    addonsCount: number,
+  ): void {
     if (min != null && min < 0) {
       throw new BadRequestException('minSelection cannot be negative');
     }

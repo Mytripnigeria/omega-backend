@@ -1,7 +1,4 @@
-import {
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { StoreEntity } from './entities/store.entity';
@@ -16,15 +13,19 @@ export class StoreService {
     private readonly storeRepo: Repository<StoreEntity>,
   ) {}
 
-  async create(dto: CreateStoreDto): Promise<StoreEntity> {
-    const store = this.storeRepo.create(dto);
+  async create(businessId: string, dto: CreateStoreDto): Promise<StoreEntity> {
+    const store = this.storeRepo.create({ ...dto, businessId });
     return this.storeRepo.save(store);
   }
 
-  async findAll(query: PaginationQueryDto): Promise<PaginatedResponseDto<StoreEntity>> {
+  async findAll(
+    businessId: string,
+    query: PaginationQueryDto,
+  ): Promise<PaginatedResponseDto<StoreEntity>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const [data, total] = await this.storeRepo.findAndCount({
+      where: { businessId },
       skip: (page - 1) * limit,
       take: limit,
       order: { createdAt: 'DESC' },
@@ -32,21 +33,23 @@ export class StoreService {
     return PaginatedResponseDto.of(data, total, page, limit);
   }
 
-  async findOne(id: string): Promise<StoreEntity> {
+  async findOne(businessId: string, id: string): Promise<StoreEntity> {
     const store = await this.storeRepo.findOne({ where: { id } });
     if (!store) throw new NotFoundException('Store not found');
+    if (store.businessId !== businessId) {
+      throw new ForbiddenException('Store does not belong to your business');
+    }
     return store;
   }
 
-  async update(id: string, dto: UpdateStoreDto): Promise<StoreEntity> {
-    const store = await this.findOne(id);
+  async update(businessId: string, id: string, dto: UpdateStoreDto): Promise<StoreEntity> {
+    const store = await this.findOne(businessId, id);
     Object.assign(store, dto);
     return this.storeRepo.save(store);
   }
 
-  async remove(id: string): Promise<void> {
-    const store = await this.findOne(id);
-    store.isActive = false;
-    await this.storeRepo.save(store);
+  async remove(businessId: string, id: string): Promise<void> {
+    await this.findOne(businessId, id);
+    await this.storeRepo.softDelete(id);
   }
 }
