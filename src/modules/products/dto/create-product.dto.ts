@@ -8,119 +8,162 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateVariationDto {
+  @ApiProperty({ example: 'Large', description: 'Variation display name' })
   @IsString()
   name: string;
 
+  @ApiPropertyOptional({ example: 'JOLLOF-L', description: 'Stock-keeping unit for this variation' })
   @IsOptional()
   @IsString()
   sku?: string;
 
+  @ApiPropertyOptional({ example: 2500, description: 'Cost price in kobo (NGN)' })
   @IsOptional()
   @IsNumber()
   price?: number;
 
+  @ApiPropertyOptional({ example: 3200, description: 'Selling price in kobo (NGN)' })
   @IsOptional()
   @IsNumber()
   sellingPrice?: number;
 
+  @ApiPropertyOptional({ example: 50, description: 'Initial stock quantity for this variation' })
   @IsOptional()
   @IsNumber()
   stock?: number;
 }
 
 export class CreateProductIngredientDto {
+  @ApiProperty({ example: 'ing1a2b3-1234-4f1a-8c3e-9a4f0c4e2b21', description: 'IngredientEntity ID' })
   @IsString()
   ingredientId: string;
 
+  @ApiProperty({ example: 0.5, description: 'Quantity consumed per unit sold' })
   @IsNumber()
   quantity: number;
 
+  @ApiProperty({ example: 'kg', description: 'Unit of measure matching the ingredient\'s unit' })
   @IsString()
   unit: string;
 }
 
 export class CreateProductDto {
+  @ApiProperty({ example: 'Jollof Rice' })
   @IsString()
   name: string;
 
+  @ApiPropertyOptional({ example: 'Smoky party-style jollof rice served with assorted proteins' })
   @IsOptional()
   @IsString()
   description?: string;
 
+  @ApiPropertyOptional({ example: 'JR-001', description: 'Internal product code for POS display' })
   @IsOptional()
   @IsString()
   productCode?: string;
 
+  @ApiPropertyOptional({ format: 'uuid', example: 'cat1a2b3-1234-4f1a-8c3e-9a4f0c4e2b21', description: 'Category to assign this product to' })
   @IsOptional()
   @IsString()
   categoryId?: string;
 
+  @ApiPropertyOptional({ example: 1800, description: 'Cost price in kobo (NGN)' })
   @IsOptional()
   @IsNumber()
   price?: number;
 
+  @ApiPropertyOptional({ example: 2500, description: 'Selling price in kobo (NGN)' })
   @IsOptional()
   @IsNumber()
   sellingPrice?: number;
 
+  @ApiPropertyOptional({ example: 'JOLLOF-001', description: 'Stock-keeping unit' })
   @IsOptional()
   @IsString()
   sku?: string;
 
+  @ApiPropertyOptional({ example: 100, description: 'Initial stock quantity (for non-ingredient-tracked products)' })
   @IsOptional()
   @IsNumber()
   stock?: number;
 
+  @ApiPropertyOptional({ example: true, description: 'true = available for sale; false = hidden/sold out' })
   @IsOptional()
   @IsBoolean()
   status?: boolean;
 
+  @ApiPropertyOptional({ format: 'uuid', example: 'sup1a2b3-1234-4f1a-8c3e-9a4f0c4e2b21', description: 'Supplier ID' })
   @IsOptional()
   @IsString()
   supplierId?: string;
 
+  @ApiPropertyOptional({ example: '15 mins', description: 'Preparation time displayed to kitchen staff' })
   @IsOptional()
   @IsString()
   prepTime?: string;
 
+  @ApiPropertyOptional({ example: 'vat', description: 'Tax configuration key applied to this product' })
   @IsOptional()
   @IsString()
   taxOption?: string;
 
+  @ApiPropertyOptional({ example: 'none', description: 'Discount configuration key applied to this product' })
   @IsOptional()
   @IsString()
   discountOption?: string;
 
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['pos', 'website'],
+    description: 'Channels where this product is visible',
+  })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
   visibility?: string[];
 
+  @ApiPropertyOptional({ example: 'https://cdn.mrjollof.com/products/jollof.jpg' })
   @IsOptional()
   @IsString()
   imageUrl?: string;
 
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'FileEntity ID for the product image' })
   @IsOptional()
   @IsUUID()
   imageFileId?: string | null;
 
+  @ApiProperty({ format: 'uuid', example: 's1a2b3c4-1234-4f1a-8c3e-9a4f0c4e2b21', description: 'Store this product belongs to' })
   @IsString()
   storeId: string;
 
+  @ApiPropertyOptional({
+    type: () => [CreateVariationDto],
+    description: 'Size or other variations for this product',
+  })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreateVariationDto)
   variations?: CreateVariationDto[];
 
+  @ApiPropertyOptional({
+    type: () => [CreateProductIngredientDto],
+    description: 'Ingredient links for kitchen stock deduction',
+  })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreateProductIngredientDto)
   ingredients?: CreateProductIngredientDto[];
 
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Addon group IDs to associate with this product',
+  })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })

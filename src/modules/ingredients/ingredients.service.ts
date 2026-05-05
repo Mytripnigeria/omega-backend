@@ -6,7 +6,8 @@ import { CreateIngredientDto } from './dto/create-ingredient.dto';
 import { UpdateIngredientDto } from './dto/update-ingredient.dto';
 import { FilterIngredientDto } from './dto/filter-ingredient.dto';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
-import { PaginatedResponseDto } from '../../common/dto/pagination.dto';
+import { IngredientResponseDto } from './dto/ingredient-response.dto';
+import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 
 @Injectable()
 export class IngredientsService {
@@ -15,12 +16,13 @@ export class IngredientsService {
     private readonly ingredientRepo: Repository<IngredientEntity>,
   ) {}
 
-  async create(dto: CreateIngredientDto): Promise<IngredientEntity> {
+  async create(dto: CreateIngredientDto): Promise<IngredientResponseDto> {
     const ingredient = this.ingredientRepo.create(dto);
-    return this.ingredientRepo.save(ingredient);
+    const saved = await this.ingredientRepo.save(ingredient);
+    return IngredientResponseDto.from(saved);
   }
 
-  async findAll(query: FilterIngredientDto): Promise<PaginatedResponseDto<IngredientEntity>> {
+  async findAll(query: FilterIngredientDto): Promise<PaginatedResponseDto<IngredientResponseDto>> {
     const { page = 1, limit = 20, storeId, search, status } = query;
 
     const qb = this.ingredientRepo.createQueryBuilder('i');
@@ -33,10 +35,14 @@ export class IngredientsService {
       .take(limit);
 
     const [data, total] = await qb.getManyAndCount();
-    return PaginatedResponseDto.of(data, total, page, limit);
+    return paginate(data, total, page, limit, IngredientResponseDto.from);
   }
 
-  async findOne(id: string): Promise<IngredientEntity> {
+  async findOne(id: string): Promise<IngredientResponseDto> {
+    return IngredientResponseDto.from(await this.findEntity(id));
+  }
+
+  private async findEntity(id: string): Promise<IngredientEntity> {
     const ingredient = await this.ingredientRepo.findOne({ where: { id } });
     if (!ingredient) throw new NotFoundException(`Ingredient ${id} not found`);
     return ingredient;
@@ -64,21 +70,23 @@ export class IngredientsService {
     };
   }
 
-  async update(id: string, dto: UpdateIngredientDto): Promise<IngredientEntity> {
-    const ingredient = await this.findOne(id);
+  async update(id: string, dto: UpdateIngredientDto): Promise<IngredientResponseDto> {
+    const ingredient = await this.findEntity(id);
     Object.assign(ingredient, dto);
-    return this.ingredientRepo.save(ingredient);
+    const saved = await this.ingredientRepo.save(ingredient);
+    return IngredientResponseDto.from(saved);
   }
 
   async remove(id: string): Promise<void> {
-    await this.findOne(id);
+    await this.findEntity(id);
     await this.ingredientRepo.softDelete(id);
   }
 
-  async adjustStock(id: string, dto: AdjustStockDto): Promise<IngredientEntity> {
-    const ingredient = await this.findOne(id);
+  async adjustStock(id: string, dto: AdjustStockDto): Promise<IngredientResponseDto> {
+    const ingredient = await this.findEntity(id);
     ingredient.currentStock = Number(ingredient.currentStock) + dto.adjustment;
     if (dto.adjustment > 0) ingredient.lastRestocked = new Date();
-    return this.ingredientRepo.save(ingredient);
+    const saved = await this.ingredientRepo.save(ingredient);
+    return IngredientResponseDto.from(saved);
   }
 }

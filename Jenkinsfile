@@ -13,8 +13,6 @@ pipeline{
                         chmod 644 temp_env/.env
                         mv temp_env/.env .env
                         rm -rf temp_env
-                        # Strip inline comments (e.g. EMAIL_PROVIDER=BREVO # comment -> BREVO)
-                        sed 's/ # .*$//' .env > .env.tmp && mv .env.tmp .env
                     '''
                 }
 

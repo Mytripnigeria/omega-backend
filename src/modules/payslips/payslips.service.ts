@@ -11,7 +11,8 @@ import { CreatePayslipDto } from './dto/create-payslip.dto';
 import { UpdatePayslipDto } from './dto/update-payslip.dto';
 import { PayslipFilterDto } from './dto/payslip-filter.dto';
 import { MarkPaidDto } from './dto/mark-paid.dto';
-import { PaginatedResponseDto } from '../../common/dto/pagination.dto';
+import { PayslipResponseDto } from './dto/payslip-response.dto';
+import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 
 const VALID_TRANSITIONS: Record<PayslipStatus, PayslipStatus[]> = {
   [PayslipStatus.DRAFT]: [PayslipStatus.PENDING, PayslipStatus.CANCELLED],
@@ -27,47 +28,6 @@ export class PayslipsService {
     @InjectRepository(PayslipEntity)
     private readonly payslipRepo: Repository<PayslipEntity>,
   ) {}
-
-  private toResponseDto(p: PayslipEntity) {
-    const additions = (p.adjustments ?? []).filter((a) => !a.isDeduction);
-    const deductions = (p.adjustments ?? []).filter((a) => a.isDeduction);
-    return {
-      id: p.id,
-      storeId: p.storeId,
-      staffId: p.staffId,
-      staffName: p.staff
-        ? `${p.staff.firstName} ${p.staff.lastName}`
-        : '',
-      period: p.period,
-      periodStart: p.periodStart,
-      periodEnd: p.periodEnd,
-      baseSalary: Number(p.baseSalary),
-      hoursWorked: p.hoursWorked ? Number(p.hoursWorked) : null,
-      overtimeHours: p.overtimeHours ? Number(p.overtimeHours) : null,
-      overtimeRate: p.overtimeRate ? Number(p.overtimeRate) : null,
-      additions: additions.map((a) => ({
-        id: a.id,
-        name: a.name,
-        amount: Number(a.amount),
-        type: a.type,
-      })),
-      deductions: deductions.map((a) => ({
-        id: a.id,
-        name: a.name,
-        amount: Number(a.amount),
-        type: a.type,
-      })),
-      grossPay: Number(p.grossPay),
-      netPay: Number(p.netPay),
-      status: p.status,
-      paymentDate: p.paymentDate ?? null,
-      paymentMethod: p.paymentMethod ?? null,
-      receiptUrl: p.receiptUrl ?? null,
-      notes: p.notes ?? null,
-      createdAt: p.createdAt,
-      updatedAt: p.updatedAt,
-    };
-  }
 
   private computePayAmounts(
     baseSalary: number,
@@ -88,7 +48,7 @@ export class PayslipsService {
     return { grossPay, netPay };
   }
 
-  async create(dto: CreatePayslipDto) {
+  async create(dto: CreatePayslipDto): Promise<PayslipResponseDto> {
     const adjustments = dto.adjustments ?? [];
     const { grossPay, netPay } = this.computePayAmounts(
       dto.baseSalary,
@@ -105,10 +65,10 @@ export class PayslipsService {
     });
 
     const saved = await this.payslipRepo.save(payslip);
-    return this.findOneInternal(saved.id);
+    return this.findOne(saved.id);
   }
 
-  async findAll(filter: PayslipFilterDto) {
+  async findAll(filter: PayslipFilterDto): Promise<PaginatedResponseDto<PayslipResponseDto>> {
     const page = filter.page ?? 1;
     const limit = filter.limit ?? 10;
 
@@ -128,32 +88,27 @@ export class PayslipsService {
     if (filter.periodTo) qb.andWhere('p.periodEnd <= :periodTo', { periodTo: filter.periodTo });
 
     const [data, total] = await qb.getManyAndCount();
-    return PaginatedResponseDto.of(
-      data.map((p) => this.toResponseDto(p)),
-      total,
-      page,
-      limit,
-    );
+    return paginate(data, total, page, limit, PayslipResponseDto.from);
   }
 
-  private async findOneInternal(id: string): Promise<ReturnType<typeof this.toResponseDto>> {
+  async findOne(id: string): Promise<PayslipResponseDto> {
+    return PayslipResponseDto.from(await this.findEntityWithRelations(id));
+  }
+
+  private async findEntityWithRelations(id: string): Promise<PayslipEntity> {
     const payslip = await this.payslipRepo.findOne({
       where: { id },
       relations: ['staff', 'adjustments'],
     });
     if (!payslip) throw new NotFoundException('Payslip not found');
-    return this.toResponseDto(payslip);
+    return payslip;
   }
 
-  async findOne(id: string) {
-    return this.findOneInternal(id);
-  }
-
-  async findMyPayslips(staffId: string, filter: PayslipFilterDto) {
+  async findMyPayslips(staffId: string, filter: PayslipFilterDto): Promise<PaginatedResponseDto<PayslipResponseDto>> {
     return this.findAll({ ...filter, staffId });
   }
 
-  async update(id: string, dto: UpdatePayslipDto) {
+  async update(id: string, dto: UpdatePayslipDto): Promise<PayslipResponseDto> {
     const payslip = await this.payslipRepo.findOne({
       where: { id },
       relations: ['adjustments'],
@@ -173,7 +128,7 @@ export class PayslipsService {
 
     Object.assign(payslip, { ...dto, grossPay, netPay });
     await this.payslipRepo.save(payslip);
-    return this.findOneInternal(id);
+    return this.findOne(id);
   }
 
   async remove(id: string): Promise<void> {
@@ -185,7 +140,7 @@ export class PayslipsService {
     await this.payslipRepo.delete(id);
   }
 
-  private async transition(id: string, targetStatus: PayslipStatus) {
+  private async transition(id: string, targetStatus: PayslipStatus): Promise<PayslipResponseDto> {
     const payslip = await this.payslipRepo.findOne({ where: { id } });
     if (!payslip) throw new NotFoundException('Payslip not found');
 
@@ -198,14 +153,14 @@ export class PayslipsService {
 
     payslip.status = targetStatus;
     await this.payslipRepo.save(payslip);
-    return this.findOneInternal(id);
+    return this.findOne(id);
   }
 
-  async approve(id: string) {
+  async approve(id: string): Promise<PayslipResponseDto> {
     return this.transition(id, PayslipStatus.APPROVED);
   }
 
-  async markPaid(id: string, dto: MarkPaidDto) {
+  async markPaid(id: string, dto: MarkPaidDto): Promise<PayslipResponseDto> {
     const payslip = await this.payslipRepo.findOne({ where: { id } });
     if (!payslip) throw new NotFoundException('Payslip not found');
 
@@ -221,6 +176,6 @@ export class PayslipsService {
     });
 
     await this.payslipRepo.save(payslip);
-    return this.findOneInternal(id);
+    return this.findOne(id);
   }
 }

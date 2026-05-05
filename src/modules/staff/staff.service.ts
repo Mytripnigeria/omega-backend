@@ -14,8 +14,10 @@ import { SetPinDto } from './dto/set-pin.dto';
 import { AddDocumentDto } from './dto/add-document.dto';
 import { StaffFilterDto } from './dto/staff-filter.dto';
 import {
-  PaginatedResponseDto,
-} from '../../common/dto/pagination.dto';
+  StaffResponseDto,
+  StaffDocumentResponseDto,
+} from './dto/staff-response.dto';
+import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 
 @Injectable()
 export class StaffService {
@@ -38,47 +40,14 @@ export class StaffService {
     return `STF${String(next).padStart(3, '0')}`;
   }
 
-  private toResponseDto(staff: StaffEntity) {
-    return {
-      id: staff.id,
-      staffCode: staff.staffCode,
-      storeId: staff.storeId,
-      roleId: staff.roleId,
-      roleName: staff.role?.name ?? '',
-      firstName: staff.firstName,
-      lastName: staff.lastName,
-      email: staff.email,
-      phone: staff.phone,
-      avatar: staff.avatar ?? null,
-      employmentType: staff.employmentType,
-      status: staff.status,
-      baseSalary: Number(staff.baseSalary),
-      salaryPeriod: staff.salaryPeriod,
-      bankName: staff.bankName ?? null,
-      bankAccount: staff.bankAccount ?? null,
-      address: staff.address ?? null,
-      emergencyContact: staff.emergencyContact ?? null,
-      emergencyPhone: staff.emergencyPhone ?? null,
-      hireDate: staff.hireDate,
-      terminationDate: staff.terminationDate ?? null,
-      documents: staff.documents ?? [],
-      createdAt: staff.createdAt,
-      updatedAt: staff.updatedAt,
-    };
-  }
-
-  async create(dto: CreateStaffDto) {
+  async create(dto: CreateStaffDto): Promise<StaffResponseDto> {
     const staffCode = await this.generateStaffCode();
     const staff = this.staffRepo.create({ ...dto, staffCode });
     const saved = await this.staffRepo.save(staff);
-    const withRole = await this.staffRepo.findOne({
-      where: { id: saved.id },
-      relations: ['role', 'documents'],
-    });
-    return this.toResponseDto(withRole!);
+    return this.findOne(saved.id);
   }
 
-  async findAll(filter: StaffFilterDto) {
+  async findAll(filter: StaffFilterDto): Promise<PaginatedResponseDto<StaffResponseDto>> {
     const page = filter.page ?? 1;
     const limit = filter.limit ?? 10;
 
@@ -106,21 +75,20 @@ export class StaffService {
     }
 
     const [data, total] = await qb.getManyAndCount();
-    return PaginatedResponseDto.of(
-      data.map((s) => this.toResponseDto(s)),
-      total,
-      page,
-      limit,
-    );
+    return paginate(data, total, page, limit, StaffResponseDto.from);
   }
 
-  async findOne(id: string) {
+  async findOne(id: string): Promise<StaffResponseDto> {
+    return StaffResponseDto.from(await this.findEntityWithRelations(id));
+  }
+
+  private async findEntityWithRelations(id: string): Promise<StaffEntity> {
     const staff = await this.staffRepo.findOne({
       where: { id },
       relations: ['role', 'documents'],
     });
     if (!staff) throw new NotFoundException('Staff member not found');
-    return this.toResponseDto(staff);
+    return staff;
   }
 
   async findByStaffCode(staffCode: string): Promise<StaffEntity | null> {
@@ -140,19 +108,11 @@ export class StaffService {
       .getOne();
   }
 
-  async update(id: string, dto: UpdateStaffDto) {
-    const staff = await this.staffRepo.findOne({
-      where: { id },
-      relations: ['role', 'documents'],
-    });
-    if (!staff) throw new NotFoundException('Staff member not found');
+  async update(id: string, dto: UpdateStaffDto): Promise<StaffResponseDto> {
+    const staff = await this.findEntityWithRelations(id);
     Object.assign(staff, dto);
-    const saved = await this.staffRepo.save(staff);
-    const withRelations = await this.staffRepo.findOne({
-      where: { id: saved.id },
-      relations: ['role', 'documents'],
-    });
-    return this.toResponseDto(withRelations!);
+    await this.staffRepo.save(staff);
+    return this.findOne(id);
   }
 
   async remove(id: string): Promise<void> {
@@ -176,12 +136,13 @@ export class StaffService {
     await this.staffRepo.update(id, { pin: undefined });
   }
 
-  async addDocument(staffId: string, dto: AddDocumentDto) {
+  async addDocument(staffId: string, dto: AddDocumentDto): Promise<StaffDocumentResponseDto> {
     const staff = await this.staffRepo.findOne({ where: { id: staffId } });
     if (!staff) throw new NotFoundException('Staff member not found');
 
     const doc = this.docRepo.create({ staffId, ...dto });
-    return this.docRepo.save(doc);
+    const saved = await this.docRepo.save(doc);
+    return StaffDocumentResponseDto.from(saved);
   }
 
   async removeDocument(staffId: string, docId: string): Promise<void> {

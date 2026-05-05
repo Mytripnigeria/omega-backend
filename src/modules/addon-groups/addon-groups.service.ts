@@ -6,7 +6,11 @@ import { AddOnEntity } from './entities/addon.entity';
 import { CreateAddOnGroupDto, CreateAddOnDto } from './dto/create-addon-group.dto';
 import { UpdateAddOnGroupDto, UpdateAddOnDto } from './dto/update-addon-group.dto';
 import { FilterAddOnGroupDto } from './dto/filter-addon-group.dto';
-import { PaginatedResponseDto } from '../../common/dto/pagination.dto';
+import {
+  AddOnGroupResponseDto,
+  AddOnResponseDto,
+} from './dto/addon-group-response.dto';
+import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 
 @Injectable()
 export class AddOnGroupsService {
@@ -17,20 +21,21 @@ export class AddOnGroupsService {
     private readonly addonRepo: Repository<AddOnEntity>,
   ) {}
 
-  async create(businessId: string, dto: CreateAddOnGroupDto): Promise<AddOnGroupEntity> {
+  async create(businessId: string, dto: CreateAddOnGroupDto): Promise<AddOnGroupResponseDto> {
     const { addons, ...groupData } = dto;
     this.validateSelection(groupData.minSelection, groupData.maxSelection, addons?.length ?? 0);
     const group = this.groupRepo.create({ ...groupData, businessId });
     if (addons?.length) {
       group.addons = addons.map((a) => this.addonRepo.create(a));
     }
-    return this.groupRepo.save(group);
+    const saved = await this.groupRepo.save(group);
+    return AddOnGroupResponseDto.from(saved);
   }
 
   async findAll(
     businessId: string,
     query: FilterAddOnGroupDto,
-  ): Promise<PaginatedResponseDto<AddOnGroupEntity>> {
+  ): Promise<PaginatedResponseDto<AddOnGroupResponseDto>> {
     const { page = 1, limit = 20, search } = query;
     const where: FindOptionsWhere<AddOnGroupEntity> = { businessId };
 
@@ -44,10 +49,14 @@ export class AddOnGroupsService {
       take: limit,
     });
 
-    return PaginatedResponseDto.of(data, total, page, limit);
+    return paginate(data, total, page, limit, AddOnGroupResponseDto.from);
   }
 
-  async findOne(businessId: string, id: string): Promise<AddOnGroupEntity> {
+  async findOne(businessId: string, id: string): Promise<AddOnGroupResponseDto> {
+    return AddOnGroupResponseDto.from(await this.findEntity(businessId, id));
+  }
+
+  private async findEntity(businessId: string, id: string): Promise<AddOnGroupEntity> {
     const group = await this.groupRepo.findOne({
       where: { id, businessId },
       relations: ['addons'],
@@ -74,22 +83,24 @@ export class AddOnGroupsService {
     businessId: string,
     id: string,
     dto: UpdateAddOnGroupDto,
-  ): Promise<AddOnGroupEntity> {
-    const group = await this.findOne(businessId, id);
+  ): Promise<AddOnGroupResponseDto> {
+    const group = await this.findEntity(businessId, id);
     Object.assign(group, dto);
     this.validateSelection(group.minSelection, group.maxSelection, group.addons?.length ?? 0);
-    return this.groupRepo.save(group);
+    const saved = await this.groupRepo.save(group);
+    return AddOnGroupResponseDto.from(saved);
   }
 
   async remove(businessId: string, id: string): Promise<void> {
-    await this.findOne(businessId, id);
+    await this.findEntity(businessId, id);
     await this.groupRepo.softDelete(id);
   }
 
-  async addAddon(businessId: string, groupId: string, dto: CreateAddOnDto): Promise<AddOnEntity> {
-    await this.findOne(businessId, groupId);
+  async addAddon(businessId: string, groupId: string, dto: CreateAddOnDto): Promise<AddOnResponseDto> {
+    await this.findEntity(businessId, groupId);
     const addon = this.addonRepo.create({ ...dto, addOnGroupId: groupId });
-    return this.addonRepo.save(addon);
+    const saved = await this.addonRepo.save(addon);
+    return AddOnResponseDto.from(saved);
   }
 
   async updateAddon(
@@ -97,15 +108,16 @@ export class AddOnGroupsService {
     groupId: string,
     addonId: string,
     dto: UpdateAddOnDto,
-  ): Promise<AddOnEntity> {
-    await this.findOne(businessId, groupId);
+  ): Promise<AddOnResponseDto> {
+    await this.findEntity(businessId, groupId);
     const addon = await this.findAddon(groupId, addonId);
     Object.assign(addon, dto);
-    return this.addonRepo.save(addon);
+    const saved = await this.addonRepo.save(addon);
+    return AddOnResponseDto.from(saved);
   }
 
   async removeAddon(businessId: string, groupId: string, addonId: string): Promise<void> {
-    await this.findOne(businessId, groupId);
+    await this.findEntity(businessId, groupId);
     const addon = await this.findAddon(groupId, addonId);
     await this.addonRepo.remove(addon);
   }
@@ -114,11 +126,12 @@ export class AddOnGroupsService {
     businessId: string,
     groupId: string,
     addonId: string,
-  ): Promise<AddOnEntity> {
-    await this.findOne(businessId, groupId);
+  ): Promise<AddOnResponseDto> {
+    await this.findEntity(businessId, groupId);
     const addon = await this.findAddon(groupId, addonId);
     addon.isAvailable = !addon.isAvailable;
-    return this.addonRepo.save(addon);
+    const saved = await this.addonRepo.save(addon);
+    return AddOnResponseDto.from(saved);
   }
 
   private async findAddon(groupId: string, addonId: string): Promise<AddOnEntity> {

@@ -5,6 +5,7 @@ import { promises as dns } from 'dns';
 import { randomBytes } from 'crypto';
 import { DomainEntity } from './entities/domain.entity';
 import { CreateDomainDto } from './dto/create-domain.dto';
+import { DomainResponseDto } from './dto/domain-response.dto';
 
 @Injectable()
 export class DomainsService {
@@ -14,21 +15,26 @@ export class DomainsService {
     private readonly dataSource: DataSource,
   ) {}
 
-  list(businessId: string): Promise<DomainEntity[]> {
-    return this.repo.find({
+  async list(businessId: string): Promise<DomainResponseDto[]> {
+    const items = await this.repo.find({
       where: { businessId },
       order: { isPrimary: 'DESC', createdAt: 'DESC' },
     });
+    return DomainResponseDto.fromMany(items);
   }
 
-  async findOne(businessId: string, id: string): Promise<DomainEntity> {
+  async findOne(businessId: string, id: string): Promise<DomainResponseDto> {
+    return DomainResponseDto.from(await this.findEntity(businessId, id));
+  }
+
+  private async findEntity(businessId: string, id: string): Promise<DomainEntity> {
     const domain = await this.repo.findOne({ where: { id, businessId } });
     if (!domain) throw new NotFoundException(`Domain ${id} not found`);
     return domain;
   }
 
-  async create(businessId: string, dto: CreateDomainDto): Promise<DomainEntity> {
-    return this.dataSource.transaction(async (manager) => {
+  async create(businessId: string, dto: CreateDomainDto): Promise<DomainResponseDto> {
+    const saved = await this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(DomainEntity);
       if (dto.isPrimary) {
         await repo.update({ businessId, isPrimary: true }, { isPrimary: false });
@@ -53,10 +59,11 @@ export class DomainsService {
       });
       return repo.save(domain);
     });
+    return DomainResponseDto.from(saved);
   }
 
-  async setPrimary(businessId: string, id: string): Promise<DomainEntity> {
-    return this.dataSource.transaction(async (manager) => {
+  async setPrimary(businessId: string, id: string): Promise<DomainResponseDto> {
+    const saved = await this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(DomainEntity);
       const domain = await repo.findOne({ where: { id, businessId } });
       if (!domain) throw new NotFoundException(`Domain ${id} not found`);
@@ -67,15 +74,16 @@ export class DomainsService {
       domain.isPrimary = true;
       return repo.save(domain);
     });
+    return DomainResponseDto.from(saved);
   }
 
   async remove(businessId: string, id: string): Promise<void> {
-    await this.findOne(businessId, id);
+    await this.findEntity(businessId, id);
     await this.repo.softDelete(id);
   }
 
-  async verify(businessId: string, id: string): Promise<DomainEntity> {
-    const domain = await this.findOne(businessId, id);
+  async verify(businessId: string, id: string): Promise<DomainResponseDto> {
+    const domain = await this.findEntity(businessId, id);
     let txtRecords: string[][] = [];
     try {
       txtRecords = await dns.resolveTxt(`_mrjollof-challenge.${domain.hostname}`);
@@ -92,6 +100,7 @@ export class DomainsService {
     }
     domain.verifiedAt = new Date();
     domain.sslStatus = 'pending';
-    return this.repo.save(domain);
+    const saved = await this.repo.save(domain);
+    return DomainResponseDto.from(saved);
   }
 }

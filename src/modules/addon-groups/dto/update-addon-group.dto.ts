@@ -1,4 +1,4 @@
-import { PartialType, OmitType } from '@nestjs/mapped-types';
+import { PartialType, OmitType } from '@nestjs/swagger';
 import { CreateAddOnGroupDto, CreateAddOnDto } from './create-addon-group.dto';
 
 export class UpdateAddOnGroupDto extends PartialType(

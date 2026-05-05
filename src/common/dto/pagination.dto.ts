@@ -43,3 +43,13 @@ export class PaginatedResponseDto<T> {
     return dto;
   }
 }
+
+export function paginate<TEntity, TDto>(
+  entities: TEntity[],
+  total: number,
+  page: number,
+  limit: number,
+  map: (entity: TEntity) => TDto,
+): PaginatedResponseDto<TDto> {
+  return PaginatedResponseDto.of(entities.map(map), total, page, limit);
+}

@@ -6,7 +6,8 @@ import { VariationOptionEntity } from './entities/variation-option.entity';
 import { CreateVariationGroupDto } from './dto/create-variation-group.dto';
 import { UpdateVariationGroupDto } from './dto/update-variation-group.dto';
 import { FilterVariationGroupDto } from './dto/filter-variation-group.dto';
-import { PaginatedResponseDto } from '../../common/dto/pagination.dto';
+import { VariationGroupResponseDto } from './dto/variation-group-response.dto';
+import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 
 @Injectable()
 export class VariationGroupsService {
@@ -17,19 +18,20 @@ export class VariationGroupsService {
     private readonly optionRepo: Repository<VariationOptionEntity>,
   ) {}
 
-  async create(businessId: string, dto: CreateVariationGroupDto): Promise<VariationGroupEntity> {
+  async create(businessId: string, dto: CreateVariationGroupDto): Promise<VariationGroupResponseDto> {
     const { options, ...groupData } = dto;
     const group = this.groupRepo.create({ ...groupData, businessId });
     if (options?.length) {
       group.options = options.map((o) => this.optionRepo.create(o));
     }
-    return this.groupRepo.save(group);
+    const saved = await this.groupRepo.save(group);
+    return VariationGroupResponseDto.from(saved);
   }
 
   async findAll(
     businessId: string,
     query: FilterVariationGroupDto,
-  ): Promise<PaginatedResponseDto<VariationGroupEntity>> {
+  ): Promise<PaginatedResponseDto<VariationGroupResponseDto>> {
     const { page = 1, limit = 20, search } = query;
     const where: FindOptionsWhere<VariationGroupEntity> = { businessId };
 
@@ -43,10 +45,14 @@ export class VariationGroupsService {
       take: limit,
     });
 
-    return PaginatedResponseDto.of(data, total, page, limit);
+    return paginate(data, total, page, limit, VariationGroupResponseDto.from);
   }
 
-  async findOne(businessId: string, id: string): Promise<VariationGroupEntity> {
+  async findOne(businessId: string, id: string): Promise<VariationGroupResponseDto> {
+    return VariationGroupResponseDto.from(await this.findEntity(businessId, id));
+  }
+
+  private async findEntity(businessId: string, id: string): Promise<VariationGroupEntity> {
     const group = await this.groupRepo.findOne({
       where: { id, businessId },
       relations: ['options'],
@@ -68,8 +74,8 @@ export class VariationGroupsService {
     businessId: string,
     id: string,
     dto: UpdateVariationGroupDto,
-  ): Promise<VariationGroupEntity> {
-    const group = await this.findOne(businessId, id);
+  ): Promise<VariationGroupResponseDto> {
+    const group = await this.findEntity(businessId, id);
     const { options, ...groupData } = dto;
     Object.assign(group, groupData);
 
@@ -78,11 +84,12 @@ export class VariationGroupsService {
       group.options = options.map((o) => this.optionRepo.create({ ...o, variationGroupId: id }));
     }
 
-    return this.groupRepo.save(group);
+    const saved = await this.groupRepo.save(group);
+    return VariationGroupResponseDto.from(saved);
   }
 
   async remove(businessId: string, id: string): Promise<void> {
-    await this.findOne(businessId, id);
+    await this.findEntity(businessId, id);
     await this.groupRepo.softDelete(id);
   }
 }

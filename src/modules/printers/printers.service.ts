@@ -4,6 +4,7 @@ import { In, Repository } from 'typeorm';
 import { PrinterEntity } from './entities/printer.entity';
 import { CreatePrinterDto } from './dto/create-printer.dto';
 import { UpdatePrinterDto } from './dto/update-printer.dto';
+import { PrinterResponseDto } from './dto/printer-response.dto';
 import { StoreScopeService } from '../../common/services/store-scope.service';
 import { StoreEntity } from '../store/entities/store.entity';
 
@@ -17,44 +18,51 @@ export class PrintersService {
     private readonly storeScope: StoreScopeService,
   ) {}
 
-  async list(businessId: string, storeId?: string): Promise<PrinterEntity[]> {
+  async list(businessId: string, storeId?: string): Promise<PrinterResponseDto[]> {
     if (storeId) {
       await this.storeScope.assertStoreInBusiness(storeId, businessId);
-      return this.repo.find({
+      const items = await this.repo.find({
         where: { storeId },
         order: { createdAt: 'ASC' },
       });
+      return PrinterResponseDto.fromMany(items);
     }
-    // No storeId given — return printers across all stores in this business.
     const stores = await this.storeRepo.find({ where: { businessId }, select: ['id'] });
     if (stores.length === 0) return [];
-    return this.repo.find({
+    const items = await this.repo.find({
       where: { storeId: In(stores.map((s) => s.id)) },
       order: { createdAt: 'ASC' },
     });
+    return PrinterResponseDto.fromMany(items);
   }
 
-  async findOne(businessId: string, id: string): Promise<PrinterEntity> {
+  async findOne(businessId: string, id: string): Promise<PrinterResponseDto> {
+    return PrinterResponseDto.from(await this.findEntity(businessId, id));
+  }
+
+  private async findEntity(businessId: string, id: string): Promise<PrinterEntity> {
     const printer = await this.repo.findOne({ where: { id } });
     if (!printer) throw new NotFoundException(`Printer ${id} not found`);
     await this.storeScope.assertStoreInBusiness(printer.storeId, businessId);
     return printer;
   }
 
-  async create(businessId: string, dto: CreatePrinterDto): Promise<PrinterEntity> {
+  async create(businessId: string, dto: CreatePrinterDto): Promise<PrinterResponseDto> {
     await this.storeScope.assertStoreInBusiness(dto.storeId, businessId);
     const printer = this.repo.create(dto);
-    return this.repo.save(printer);
+    const saved = await this.repo.save(printer);
+    return PrinterResponseDto.from(saved);
   }
 
-  async update(businessId: string, id: string, dto: UpdatePrinterDto): Promise<PrinterEntity> {
-    const printer = await this.findOne(businessId, id);
+  async update(businessId: string, id: string, dto: UpdatePrinterDto): Promise<PrinterResponseDto> {
+    const printer = await this.findEntity(businessId, id);
     Object.assign(printer, dto);
-    return this.repo.save(printer);
+    const saved = await this.repo.save(printer);
+    return PrinterResponseDto.from(saved);
   }
 
   async remove(businessId: string, id: string): Promise<void> {
-    await this.findOne(businessId, id);
+    await this.findEntity(businessId, id);
     await this.repo.softDelete(id);
   }
 }

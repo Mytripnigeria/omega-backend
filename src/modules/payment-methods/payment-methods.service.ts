@@ -7,6 +7,7 @@ import {
   ReorderPaymentMethodsDto,
   UpdatePaymentMethodDto,
 } from './dto/update-payment-method.dto';
+import { PaymentMethodResponseDto } from './dto/payment-method-response.dto';
 
 @Injectable()
 export class PaymentMethodsService {
@@ -15,36 +16,43 @@ export class PaymentMethodsService {
     private readonly repo: Repository<PaymentMethodEntity>,
   ) {}
 
-  list(businessId: string): Promise<PaymentMethodEntity[]> {
-    return this.repo.find({
+  async list(businessId: string): Promise<PaymentMethodResponseDto[]> {
+    const items = await this.repo.find({
       where: { businessId },
       order: { order: 'ASC', createdAt: 'ASC' },
     });
+    return PaymentMethodResponseDto.fromMany(items);
   }
 
-  async findOne(businessId: string, id: string): Promise<PaymentMethodEntity> {
+  async findOne(businessId: string, id: string): Promise<PaymentMethodResponseDto> {
+    return PaymentMethodResponseDto.from(await this.findEntity(businessId, id));
+  }
+
+  private async findEntity(businessId: string, id: string): Promise<PaymentMethodEntity> {
     const method = await this.repo.findOne({ where: { id, businessId } });
     if (!method) throw new NotFoundException(`Payment method ${id} not found`);
     return method;
   }
 
-  async create(businessId: string, dto: CreatePaymentMethodDto): Promise<PaymentMethodEntity> {
+  async create(businessId: string, dto: CreatePaymentMethodDto): Promise<PaymentMethodResponseDto> {
     const method = this.repo.create({ ...dto, businessId });
-    return this.repo.save(method);
+    const saved = await this.repo.save(method);
+    return PaymentMethodResponseDto.from(saved);
   }
 
   async update(
     businessId: string,
     id: string,
     dto: UpdatePaymentMethodDto,
-  ): Promise<PaymentMethodEntity> {
-    const method = await this.findOne(businessId, id);
+  ): Promise<PaymentMethodResponseDto> {
+    const method = await this.findEntity(businessId, id);
     Object.assign(method, dto);
-    return this.repo.save(method);
+    const saved = await this.repo.save(method);
+    return PaymentMethodResponseDto.from(saved);
   }
 
   async remove(businessId: string, id: string): Promise<void> {
-    await this.findOne(businessId, id);
+    await this.findEntity(businessId, id);
     await this.repo.softDelete(id);
   }
 

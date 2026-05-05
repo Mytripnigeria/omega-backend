@@ -5,6 +5,10 @@ import { randomBytes, createHmac } from 'crypto';
 import { WebhookEntity } from './entities/webhook.entity';
 import { ALLOWED_WEBHOOK_EVENTS, CreateWebhookDto } from './dto/create-webhook.dto';
 import { UpdateWebhookDto } from './dto/update-webhook.dto';
+import {
+  WebhookResponseDto,
+  WebhookWithSecretResponseDto,
+} from './dto/webhook-response.dto';
 
 const ALLOWED = new Set<string>(ALLOWED_WEBHOOK_EVENTS as readonly string[]);
 
@@ -15,14 +19,19 @@ export class WebhooksService {
     private readonly repo: Repository<WebhookEntity>,
   ) {}
 
-  list(businessId: string): Promise<WebhookEntity[]> {
-    return this.repo.find({
+  async list(businessId: string): Promise<WebhookResponseDto[]> {
+    const items = await this.repo.find({
       where: { businessId },
       order: { createdAt: 'DESC' },
     });
+    return WebhookResponseDto.fromMany(items);
   }
 
-  async findOne(businessId: string, id: string): Promise<WebhookEntity> {
+  async findOne(businessId: string, id: string): Promise<WebhookResponseDto> {
+    return WebhookResponseDto.from(await this.findEntity(businessId, id));
+  }
+
+  private async findEntity(businessId: string, id: string): Promise<WebhookEntity> {
     const webhook = await this.repo.findOne({ where: { id, businessId } });
     if (!webhook) throw new NotFoundException(`Webhook ${id} not found`);
     return webhook;
@@ -45,7 +54,7 @@ export class WebhooksService {
   async create(
     businessId: string,
     dto: CreateWebhookDto,
-  ): Promise<{ webhook: WebhookEntity; secret: string }> {
+  ): Promise<WebhookWithSecretResponseDto> {
     this.validateEvents(dto.events);
     const secret = this.generateSecret();
     const webhook = this.repo.create({
@@ -55,22 +64,23 @@ export class WebhooksService {
       secretLastFour: secret.slice(-4),
     });
     const saved = await this.repo.save(webhook);
-    return { webhook: saved, secret };
+    return WebhookWithSecretResponseDto.fromWithSecret(saved, secret);
   }
 
   async update(
     businessId: string,
     id: string,
     dto: UpdateWebhookDto,
-  ): Promise<WebhookEntity> {
-    const webhook = await this.findOne(businessId, id);
+  ): Promise<WebhookResponseDto> {
+    const webhook = await this.findEntity(businessId, id);
     if (dto.events) this.validateEvents(dto.events);
     Object.assign(webhook, dto);
-    return this.repo.save(webhook);
+    const saved = await this.repo.save(webhook);
+    return WebhookResponseDto.from(saved);
   }
 
   async remove(businessId: string, id: string): Promise<void> {
-    await this.findOne(businessId, id);
+    await this.findEntity(businessId, id);
     await this.repo.softDelete(id);
   }
 
@@ -78,7 +88,7 @@ export class WebhooksService {
     businessId: string,
     id: string,
   ): Promise<{ secret: string; secretLastFour: string }> {
-    const webhook = await this.findOne(businessId, id);
+    const webhook = await this.findEntity(businessId, id);
     const secret = this.generateSecret();
     webhook.secret = secret;
     webhook.secretLastFour = secret.slice(-4);

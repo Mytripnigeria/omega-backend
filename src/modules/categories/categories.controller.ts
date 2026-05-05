@@ -30,7 +30,8 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { JwtOrStaffGuard } from '../../common/guards/jwt-or-staff.guard';
 import { BusinessId } from '../../common/decorators/business-id.decorator';
 import { BusinessContext } from '../../common/decorators/business-context.decorator';
-import { CategoryEntity, CategoryType } from './entities/category.entity';
+import { CategoryType } from './entities/category.entity';
+import { CategoryResponseDto } from './dto/category-response.dto';
 
 @ApiTags('categories')
 @ApiBearerAuth()
@@ -44,7 +45,7 @@ export class CategoriesController {
       'Admin-only. Creates a category for the authenticated business. ' +
       'If `type` is omitted it defaults to "menu". Names must be unique per (business, type).',
   })
-  @ApiCreatedResponse({ type: CategoryEntity })
+  @ApiCreatedResponse({ type: CategoryResponseDto })
   @UseGuards(JwtAuthGuard)
   @Post()
   create(@BusinessId() businessId: string, @Body() dto: CreateCategoryDto) {
@@ -61,7 +62,7 @@ export class CategoriesController {
     schema: {
       type: 'object',
       properties: {
-        data: { type: 'array', items: { $ref: '#/components/schemas/CategoryEntity' } },
+        data: { type: 'array', items: { $ref: '#/components/schemas/CategoryResponseDto' } },
         total: { type: 'integer', example: 24 },
         page: { type: 'integer', example: 1 },
         limit: { type: 'integer', example: 100 },
@@ -125,7 +126,7 @@ export class CategoriesController {
 
   @ApiOperation({ summary: 'Get a single category' })
   @ApiParam({ name: 'id', format: 'uuid' })
-  @ApiOkResponse({ type: CategoryEntity })
+  @ApiOkResponse({ type: CategoryResponseDto })
   @UseGuards(JwtOrStaffGuard)
   @Get(':id')
   findOne(@BusinessContext() businessId: string, @Param('id') id: string) {
@@ -134,7 +135,7 @@ export class CategoriesController {
 
   @ApiOperation({ summary: 'Update a category', description: 'Admin-only. Partial update.' })
   @ApiParam({ name: 'id', format: 'uuid' })
-  @ApiOkResponse({ type: CategoryEntity })
+  @ApiOkResponse({ type: CategoryResponseDto })
   @UseGuards(JwtAuthGuard)
   @Patch(':id')
   update(

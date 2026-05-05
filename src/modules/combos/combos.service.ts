@@ -7,7 +7,11 @@ import { CreateComboDto, CreateComboItemDto } from './dto/create-combo.dto';
 import { UpdateComboDto, ToggleComboStatusDto } from './dto/update-combo.dto';
 import { UpdateComboItemDto } from './dto/update-combo-item.dto';
 import { FilterComboDto } from './dto/filter-combo.dto';
-import { PaginatedResponseDto } from '../../common/dto/pagination.dto';
+import {
+  ComboResponseDto,
+  ComboItemResponseDto,
+} from './dto/combo-response.dto';
+import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { StorageService } from '../storage/storage.service';
 
 @Injectable()
@@ -38,7 +42,7 @@ export class CombosService {
     }
   }
 
-  async create(dto: CreateComboDto): Promise<ComboEntity> {
+  async create(dto: CreateComboDto): Promise<ComboResponseDto> {
     const { products, imageFileId, imageUrl, ...comboData } = dto;
     const combo = this.comboRepo.create(comboData);
     await this.resolveImageFields(combo, { imageFileId, imageUrl });
@@ -49,10 +53,11 @@ export class CombosService {
       );
     }
 
-    return this.comboRepo.save(combo);
+    const saved = await this.comboRepo.save(combo);
+    return this.findOne(saved.id);
   }
 
-  async findAll(query: FilterComboDto): Promise<PaginatedResponseDto<ComboEntity>> {
+  async findAll(query: FilterComboDto): Promise<PaginatedResponseDto<ComboResponseDto>> {
     const { page = 1, limit = 20, storeId, status, search } = query;
     const where: FindOptionsWhere<ComboEntity> = {};
 
@@ -67,10 +72,14 @@ export class CombosService {
       take: limit,
     });
 
-    return PaginatedResponseDto.of(data, total, page, limit);
+    return paginate(data, total, page, limit, ComboResponseDto.from);
   }
 
-  async findOne(id: string): Promise<ComboEntity> {
+  async findOne(id: string): Promise<ComboResponseDto> {
+    return ComboResponseDto.from(await this.findEntity(id));
+  }
+
+  private async findEntity(id: string): Promise<ComboEntity> {
     const combo = await this.comboRepo.findOne({
       where: { id },
       relations: ['items', 'items.product'],
@@ -91,39 +100,51 @@ export class CombosService {
     return { total: combos.length, active, totalSales, revenue };
   }
 
-  async update(id: string, dto: UpdateComboDto): Promise<ComboEntity> {
-    const combo = await this.findOne(id);
+  async update(id: string, dto: UpdateComboDto): Promise<ComboResponseDto> {
+    const combo = await this.findEntity(id);
     const { imageFileId, imageUrl, ...rest } = dto;
     Object.assign(combo, rest);
     await this.resolveImageFields(combo, { imageFileId, imageUrl });
-    return this.comboRepo.save(combo);
+    await this.comboRepo.save(combo);
+    return this.findOne(id);
   }
 
   async remove(id: string): Promise<void> {
-    await this.findOne(id);
+    await this.findEntity(id);
     await this.comboRepo.softDelete(id);
   }
 
-  async toggleStatus(id: string, dto: ToggleComboStatusDto): Promise<ComboEntity> {
-    const combo = await this.findOne(id);
+  async toggleStatus(id: string, dto: ToggleComboStatusDto): Promise<ComboResponseDto> {
+    const combo = await this.findEntity(id);
     combo.isActive = dto.isActive;
-    return this.comboRepo.save(combo);
+    await this.comboRepo.save(combo);
+    return this.findOne(id);
   }
 
-  async addItem(comboId: string, dto: CreateComboItemDto): Promise<ComboItemEntity> {
-    await this.findOne(comboId);
+  async addItem(comboId: string, dto: CreateComboItemDto): Promise<ComboItemResponseDto> {
+    await this.findEntity(comboId);
     const item = this.comboItemRepo.create({
       comboId,
       productId: dto.productId,
       quantity: dto.quantity ?? 1,
     });
-    return this.comboItemRepo.save(item);
+    const saved = await this.comboItemRepo.save(item);
+    const reloaded = await this.comboItemRepo.findOne({
+      where: { id: saved.id },
+      relations: ['product'],
+    });
+    return ComboItemResponseDto.from(reloaded ?? saved);
   }
 
-  async updateItem(comboId: string, itemId: string, dto: UpdateComboItemDto): Promise<ComboItemEntity> {
+  async updateItem(comboId: string, itemId: string, dto: UpdateComboItemDto): Promise<ComboItemResponseDto> {
     const item = await this.findItem(comboId, itemId);
     item.quantity = dto.quantity;
-    return this.comboItemRepo.save(item);
+    await this.comboItemRepo.save(item);
+    const reloaded = await this.comboItemRepo.findOne({
+      where: { id: itemId },
+      relations: ['product'],
+    });
+    return ComboItemResponseDto.from(reloaded ?? item);
   }
 
   async removeItem(comboId: string, itemId: string): Promise<void> {

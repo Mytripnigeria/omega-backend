@@ -9,9 +9,8 @@ import { RoleEntity } from './entities/role.entity';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { RoleFilterDto } from './dto/role-filter.dto';
-import {
-  PaginatedResponseDto,
-} from '../../common/dto/pagination.dto';
+import { RoleResponseDto } from './dto/role-response.dto';
+import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 
 export const ALL_PERMISSIONS = [
   'orders.read',
@@ -42,15 +41,13 @@ export class RolesService {
     private readonly roleRepo: Repository<RoleEntity>,
   ) {}
 
-  async create(dto: CreateRoleDto): Promise<RoleEntity & { staffCount: number }> {
+  async create(dto: CreateRoleDto): Promise<RoleResponseDto> {
     const role = this.roleRepo.create(dto);
     const saved = await this.roleRepo.save(role);
-    return { ...saved, staffCount: 0 };
+    return RoleResponseDto.from({ ...saved, staffCount: 0 });
   }
 
-  async findAll(
-    filter: RoleFilterDto,
-  ): Promise<PaginatedResponseDto<RoleEntity & { staffCount: number }>> {
+  async findAll(filter: RoleFilterDto): Promise<PaginatedResponseDto<RoleResponseDto>> {
     const page = filter.page ?? 1;
     const limit = filter.limit ?? 10;
 
@@ -67,15 +64,20 @@ export class RolesService {
     }
 
     const [data, total] = await qb.getManyAndCount();
-    return PaginatedResponseDto.of(
+    return paginate(
       data as (RoleEntity & { staffCount: number })[],
       total,
       page,
       limit,
+      RoleResponseDto.from,
     );
   }
 
-  async findOne(id: string): Promise<RoleEntity & { staffCount: number }> {
+  async findOne(id: string): Promise<RoleResponseDto> {
+    return RoleResponseDto.from(await this.findOneEntity(id));
+  }
+
+  private async findOneEntity(id: string): Promise<RoleEntity & { staffCount: number }> {
     const qb = this.roleRepo
       .createQueryBuilder('r')
       .loadRelationCountAndMap('r.staffCount', 'r.staff')
@@ -92,10 +94,7 @@ export class RolesService {
     return role;
   }
 
-  async update(
-    id: string,
-    dto: UpdateRoleDto,
-  ): Promise<RoleEntity & { staffCount: number }> {
+  async update(id: string, dto: UpdateRoleDto): Promise<RoleResponseDto> {
     const role = await this.findByIdRaw(id);
     Object.assign(role, dto);
     await this.roleRepo.save(role);
@@ -103,7 +102,7 @@ export class RolesService {
   }
 
   async remove(id: string): Promise<void> {
-    const role = await this.findOne(id);
+    const role = await this.findOneEntity(id);
     if (role.staffCount > 0) {
       throw new BadRequestException(
         'Cannot delete a role that has staff assigned to it',

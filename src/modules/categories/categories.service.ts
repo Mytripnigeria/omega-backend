@@ -9,7 +9,8 @@ import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { FilterCategoryDto } from './dto/filter-category.dto';
 import { ReorderCategoriesDto } from './dto/reorder-category.dto';
-import { PaginatedResponseDto } from '../../common/dto/pagination.dto';
+import { CategoryResponseDto } from './dto/category-response.dto';
+import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { StorageService } from '../storage/storage.service';
 
 @Injectable()
@@ -38,17 +39,18 @@ export class CategoriesService {
     }
   }
 
-  async create(businessId: string, dto: CreateCategoryDto): Promise<CategoryEntity> {
+  async create(businessId: string, dto: CreateCategoryDto): Promise<CategoryResponseDto> {
     const { imageFileId, imageUrl, ...rest } = dto;
     const category = this.categoryRepo.create({ ...rest, businessId });
     await this.resolveImageFields(category, { imageFileId, imageUrl });
-    return this.categoryRepo.save(category);
+    const saved = await this.categoryRepo.save(category);
+    return CategoryResponseDto.from(saved);
   }
 
   async findAll(
     businessId: string,
     query: FilterCategoryDto,
-  ): Promise<PaginatedResponseDto<CategoryEntity>> {
+  ): Promise<PaginatedResponseDto<CategoryResponseDto>> {
     const { page = 1, limit = 20, search, status, type } = query;
     const where: FindOptionsWhere<CategoryEntity> = { businessId };
 
@@ -63,10 +65,15 @@ export class CategoriesService {
       take: limit,
     });
 
-    return PaginatedResponseDto.of(data, total, page, limit);
+    return paginate(data, total, page, limit, CategoryResponseDto.from);
   }
 
-  async findOne(businessId: string, id: string): Promise<CategoryEntity> {
+  async findOne(businessId: string, id: string): Promise<CategoryResponseDto> {
+    const category = await this.findEntity(businessId, id);
+    return CategoryResponseDto.from(category);
+  }
+
+  private async findEntity(businessId: string, id: string): Promise<CategoryEntity> {
     const category = await this.categoryRepo.findOne({ where: { id, businessId } });
     if (!category) throw new NotFoundException(`Category ${id} not found`);
     return category;
@@ -103,16 +110,17 @@ export class CategoriesService {
     businessId: string,
     id: string,
     dto: UpdateCategoryDto,
-  ): Promise<CategoryEntity> {
-    const category = await this.findOne(businessId, id);
+  ): Promise<CategoryResponseDto> {
+    const category = await this.findEntity(businessId, id);
     const { imageFileId, imageUrl, ...rest } = dto;
     Object.assign(category, rest);
     await this.resolveImageFields(category, { imageFileId, imageUrl });
-    return this.categoryRepo.save(category);
+    const saved = await this.categoryRepo.save(category);
+    return CategoryResponseDto.from(saved);
   }
 
   async remove(businessId: string, id: string): Promise<void> {
-    await this.findOne(businessId, id);
+    await this.findEntity(businessId, id);
     await this.categoryRepo.softDelete(id);
   }
 

@@ -6,6 +6,7 @@ import {
   NOTIFICATION_DEFAULTS,
 } from './entities/notification-preference.entity';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
+import { NotificationPreferenceResponseDto } from './dto/notification-preference-response.dto';
 
 @Injectable()
 export class NotificationPreferencesService {
@@ -14,7 +15,11 @@ export class NotificationPreferencesService {
     private readonly repo: Repository<NotificationPreferenceEntity>,
   ) {}
 
-  async get(adminId: string): Promise<NotificationPreferenceEntity> {
+  async get(adminId: string): Promise<NotificationPreferenceResponseDto> {
+    return NotificationPreferenceResponseDto.from(await this.getEntity(adminId));
+  }
+
+  private async getEntity(adminId: string): Promise<NotificationPreferenceEntity> {
     let pref = await this.repo.findOne({ where: { adminId } });
     if (!pref) {
       pref = this.repo.create({
@@ -30,10 +35,11 @@ export class NotificationPreferencesService {
   async update(
     adminId: string,
     dto: UpdateNotificationPreferencesDto,
-  ): Promise<NotificationPreferenceEntity> {
-    const pref = await this.get(adminId);
+  ): Promise<NotificationPreferenceResponseDto> {
+    const pref = await this.getEntity(adminId);
     if (dto.channels) pref.channels = { ...pref.channels, ...dto.channels };
     if (dto.events) pref.events = { ...pref.events, ...dto.events };
-    return this.repo.save(pref);
+    const saved = await this.repo.save(pref);
+    return NotificationPreferenceResponseDto.from(saved);
   }
 }

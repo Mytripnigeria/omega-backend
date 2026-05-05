@@ -5,47 +5,67 @@ import {
   PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 @Entity('business_settings')
 export class BusinessSettingsEntity {
+  @ApiProperty({ format: 'uuid', example: 'b1f1d2c0-1234-4f1a-8c3e-9a4f0c4e2b21' })
   @PrimaryColumn('uuid')
   businessId: string;
 
-  // Receipt template
+  @ApiPropertyOptional({ example: 'Thank you for dining with us!', nullable: true })
   @Column({ nullable: true, type: 'text' })
   receiptHeader: string;
 
+  @ApiPropertyOptional({ example: 'Visit us again at mrjollof.com', nullable: true })
   @Column({ nullable: true, type: 'text' })
   receiptFooter: string;
 
+  @ApiProperty({ example: true, default: true })
   @Column({ default: true })
   receiptShowLogo: boolean;
 
+  @ApiProperty({ example: true, default: true })
   @Column({ default: true })
   receiptShowItemPrices: boolean;
 
+  @ApiProperty({ example: true, default: true })
   @Column({ default: true })
   receiptShowTaxBreakdown: boolean;
 
+  @ApiProperty({ example: false, default: false })
   @Column({ default: false })
   receiptShowServerName: boolean;
 
+  @ApiProperty({ example: true, default: true })
   @Column({ default: true })
   receiptShowOrderNumber: boolean;
 
+  @ApiProperty({ example: true, default: true })
   @Column({ default: true })
   receiptCustomerCopy: boolean;
 
-  // Notification quiet hours (HH:MM strings, business-wide default)
+  @ApiPropertyOptional({
+    example: '22:00',
+    nullable: true,
+    description: 'Start of do-not-disturb window (HH:MM, 24h). Null = no quiet hours.',
+  })
   @Column({ nullable: true, type: 'varchar', length: 5 })
   notificationDoNotDisturbStart: string | null;
 
+  @ApiPropertyOptional({
+    example: '07:00',
+    nullable: true,
+    description: 'End of do-not-disturb window (HH:MM, 24h).',
+  })
   @Column({ nullable: true, type: 'varchar', length: 5 })
   notificationDoNotDisturbEnd: string | null;
 
+  @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn()
   createdAt: Date;
 
+  @ApiProperty({ type: String, format: 'date-time' })
   @UpdateDateColumn()
   updatedAt: Date;
 }

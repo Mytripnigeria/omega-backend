@@ -5,11 +5,16 @@ import { ProductEntity } from './entities/product.entity';
 import { ProductVariationEntity } from './entities/product-variation.entity';
 import { ProductIngredientEntity } from './entities/product-ingredient.entity';
 import { AddOnGroupEntity } from '../addon-groups/entities/addon-group.entity';
-import { CreateProductDto, CreateVariationDto, CreateProductIngredientDto } from './dto/create-product.dto';
+import { CreateProductDto, CreateVariationDto } from './dto/create-product.dto';
 import { UpdateProductDto, UpdateVariationDto, ToggleProductStatusDto } from './dto/update-product.dto';
 import { FilterProductDto } from './dto/filter-product.dto';
 import { LinkIngredientDto } from './dto/link-ingredient.dto';
-import { PaginatedResponseDto } from '../../common/dto/pagination.dto';
+import {
+  ProductResponseDto,
+  ProductVariationResponseDto,
+  ProductIngredientResponseDto,
+} from './dto/product-response.dto';
+import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { StorageService } from '../storage/storage.service';
 
 @Injectable()
@@ -44,15 +49,13 @@ export class ProductsService {
     }
   }
 
-  async create(dto: CreateProductDto): Promise<ProductEntity> {
+  async create(dto: CreateProductDto): Promise<ProductResponseDto> {
     const { variations, ingredients, addonGroupIds, imageFileId, imageUrl, ...productData } = dto;
     const product = this.productRepo.create(productData);
     await this.resolveImageFields(product, { imageFileId, imageUrl });
 
     if (variations?.length) {
-      product.variations = variations.map((v) =>
-        this.variationRepo.create(v),
-      );
+      product.variations = variations.map((v) => this.variationRepo.create(v));
     }
 
     if (ingredients?.length) {
@@ -67,10 +70,11 @@ export class ProductsService {
       });
     }
 
-    return this.productRepo.save(product);
+    const saved = await this.productRepo.save(product);
+    return this.findOne(saved.id);
   }
 
-  async findAll(query: FilterProductDto): Promise<PaginatedResponseDto<ProductEntity>> {
+  async findAll(query: FilterProductDto): Promise<PaginatedResponseDto<ProductResponseDto>> {
     const { page = 1, limit = 20, storeId, categoryId, status, search } = query;
     const where: FindOptionsWhere<ProductEntity> = {};
 
@@ -86,10 +90,14 @@ export class ProductsService {
       take: limit,
     });
 
-    return PaginatedResponseDto.of(data, total, page, limit);
+    return paginate(data, total, page, limit, ProductResponseDto.from);
   }
 
-  async findOne(id: string): Promise<ProductEntity> {
+  async findOne(id: string): Promise<ProductResponseDto> {
+    return ProductResponseDto.from(await this.findEntity(id));
+  }
+
+  private async findEntity(id: string): Promise<ProductEntity> {
     const product = await this.productRepo.findOne({
       where: { id },
       relations: ['variations', 'productIngredients', 'productIngredients.ingredient', 'addonGroups', 'addonGroups.addons'],
@@ -126,39 +134,43 @@ export class ProductsService {
     };
   }
 
-  async update(id: string, dto: UpdateProductDto): Promise<ProductEntity> {
-    const product = await this.findOne(id);
+  async update(id: string, dto: UpdateProductDto): Promise<ProductResponseDto> {
+    const product = await this.findEntity(id);
     const { imageFileId, imageUrl, ...rest } = dto;
     Object.assign(product, rest);
     await this.resolveImageFields(product, { imageFileId, imageUrl });
-    return this.productRepo.save(product);
+    await this.productRepo.save(product);
+    return this.findOne(id);
   }
 
   async remove(id: string): Promise<void> {
-    await this.findOne(id);
+    await this.findEntity(id);
     await this.productRepo.softDelete(id);
   }
 
-  async toggleStatus(id: string, dto: ToggleProductStatusDto): Promise<ProductEntity> {
-    const product = await this.findOne(id);
+  async toggleStatus(id: string, dto: ToggleProductStatusDto): Promise<ProductResponseDto> {
+    const product = await this.findEntity(id);
     product.status = dto.status;
-    return this.productRepo.save(product);
+    await this.productRepo.save(product);
+    return this.findOne(id);
   }
 
-  async addVariation(productId: string, dto: CreateVariationDto): Promise<ProductVariationEntity> {
-    await this.findOne(productId);
+  async addVariation(productId: string, dto: CreateVariationDto): Promise<ProductVariationResponseDto> {
+    await this.findEntity(productId);
     const variation = this.variationRepo.create({ ...dto, productId });
-    return this.variationRepo.save(variation);
+    const saved = await this.variationRepo.save(variation);
+    return ProductVariationResponseDto.from(saved);
   }
 
   async updateVariation(
     productId: string,
     varId: string,
     dto: UpdateVariationDto,
-  ): Promise<ProductVariationEntity> {
+  ): Promise<ProductVariationResponseDto> {
     const variation = await this.findVariation(productId, varId);
     Object.assign(variation, dto);
-    return this.variationRepo.save(variation);
+    const saved = await this.variationRepo.save(variation);
+    return ProductVariationResponseDto.from(saved);
   }
 
   async removeVariation(productId: string, varId: string): Promise<void> {
@@ -166,10 +178,15 @@ export class ProductsService {
     await this.variationRepo.remove(variation);
   }
 
-  async linkIngredient(productId: string, dto: LinkIngredientDto): Promise<ProductIngredientEntity> {
-    await this.findOne(productId);
+  async linkIngredient(productId: string, dto: LinkIngredientDto): Promise<ProductIngredientResponseDto> {
+    await this.findEntity(productId);
     const pi = this.productIngredientRepo.create({ ...dto, productId });
-    return this.productIngredientRepo.save(pi);
+    const saved = await this.productIngredientRepo.save(pi);
+    const reloaded = await this.productIngredientRepo.findOne({
+      where: { id: saved.id },
+      relations: ['ingredient'],
+    });
+    return ProductIngredientResponseDto.from(reloaded ?? saved);
   }
 
   async unlinkIngredient(productId: string, ingredientId: string): Promise<void> {
@@ -180,9 +197,9 @@ export class ProductsService {
     await this.productIngredientRepo.remove(pi);
   }
 
-  async linkAddonGroup(productId: string, groupId: string): Promise<ProductEntity> {
+  async linkAddonGroup(productId: string, groupId: string): Promise<ProductResponseDto> {
     const [product, group] = await Promise.all([
-      this.findOne(productId),
+      this.findEntity(productId),
       this.addonGroupRepo.findOne({ where: { id: groupId } }),
     ]);
     if (!group) throw new NotFoundException(`Add-on group ${groupId} not found`);
@@ -190,13 +207,15 @@ export class ProductsService {
     if (!product.addonGroups.find((g) => g.id === groupId)) {
       product.addonGroups.push(group);
     }
-    return this.productRepo.save(product);
+    await this.productRepo.save(product);
+    return this.findOne(productId);
   }
 
-  async unlinkAddonGroup(productId: string, groupId: string): Promise<ProductEntity> {
-    const product = await this.findOne(productId);
+  async unlinkAddonGroup(productId: string, groupId: string): Promise<ProductResponseDto> {
+    const product = await this.findEntity(productId);
     product.addonGroups = (product.addonGroups ?? []).filter((g) => g.id !== groupId);
-    return this.productRepo.save(product);
+    await this.productRepo.save(product);
+    return this.findOne(productId);
   }
 
   private async findVariation(productId: string, varId: string): Promise<ProductVariationEntity> {

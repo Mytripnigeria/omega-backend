@@ -10,7 +10,8 @@ import { ShiftEntity, ShiftStatus } from './entities/shift.entity';
 import { CreateShiftDto } from './dto/create-shift.dto';
 import { UpdateShiftDto } from './dto/update-shift.dto';
 import { ShiftFilterDto } from './dto/shift-filter.dto';
-import { PaginatedResponseDto } from '../../common/dto/pagination.dto';
+import { ShiftResponseDto } from './dto/shift-response.dto';
+import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 
 @Injectable()
 export class ShiftsService {
@@ -19,36 +20,13 @@ export class ShiftsService {
     private readonly shiftRepo: Repository<ShiftEntity>,
   ) {}
 
-  private toResponseDto(shift: ShiftEntity) {
-    return {
-      id: shift.id,
-      storeId: shift.storeId,
-      staffId: shift.staffId,
-      staffName: shift.staff
-        ? `${shift.staff.firstName} ${shift.staff.lastName}`
-        : '',
-      roleId: shift.roleId ?? null,
-      roleName: shift.role?.name ?? null,
-      date: shift.date,
-      startTime: shift.startTime,
-      endTime: shift.endTime,
-      breakDuration: shift.breakDuration ?? null,
-      status: shift.status,
-      actualClockIn: shift.actualClockIn ?? null,
-      actualClockOut: shift.actualClockOut ?? null,
-      notes: shift.notes ?? null,
-      createdAt: shift.createdAt,
-      updatedAt: shift.updatedAt,
-    };
-  }
-
-  async create(dto: CreateShiftDto) {
+  async create(dto: CreateShiftDto): Promise<ShiftResponseDto> {
     const shift = this.shiftRepo.create(dto);
     const saved = await this.shiftRepo.save(shift);
-    return this.findOneWithRelations(saved.id);
+    return this.findOne(saved.id);
   }
 
-  async findAll(filter: ShiftFilterDto) {
+  async findAll(filter: ShiftFilterDto): Promise<PaginatedResponseDto<ShiftResponseDto>> {
     const page = filter.page ?? 1;
     const limit = filter.limit ?? 10;
 
@@ -70,33 +48,28 @@ export class ShiftsService {
     if (filter.dateTo) qb.andWhere('sh.date <= :dateTo', { dateTo: filter.dateTo });
 
     const [data, total] = await qb.getManyAndCount();
-    return PaginatedResponseDto.of(
-      data.map((s) => this.toResponseDto(s)),
-      total,
-      page,
-      limit,
-    );
+    return paginate(data, total, page, limit, ShiftResponseDto.from);
   }
 
-  private async findOneWithRelations(id: string): Promise<ReturnType<typeof this.toResponseDto>> {
+  private async findEntityWithRelations(id: string): Promise<ShiftEntity> {
     const shift = await this.shiftRepo.findOne({
       where: { id },
       relations: ['staff', 'role'],
     });
     if (!shift) throw new NotFoundException('Shift not found');
-    return this.toResponseDto(shift);
+    return shift;
   }
 
-  async findOne(id: string) {
-    return this.findOneWithRelations(id);
+  async findOne(id: string): Promise<ShiftResponseDto> {
+    return ShiftResponseDto.from(await this.findEntityWithRelations(id));
   }
 
-  async update(id: string, dto: UpdateShiftDto) {
+  async update(id: string, dto: UpdateShiftDto): Promise<ShiftResponseDto> {
     const shift = await this.shiftRepo.findOne({ where: { id } });
     if (!shift) throw new NotFoundException('Shift not found');
     Object.assign(shift, dto);
     await this.shiftRepo.save(shift);
-    return this.findOneWithRelations(id);
+    return this.findOne(id);
   }
 
   async remove(id: string): Promise<void> {
@@ -105,10 +78,8 @@ export class ShiftsService {
     await this.shiftRepo.delete(id);
   }
 
-  async clockIn(shiftId: string, staffId: string) {
-    const shift = await this.shiftRepo.findOne({ where: { id: shiftId }, relations: ['staff', 'role'] });
-    if (!shift) throw new NotFoundException('Shift not found');
-
+  async clockIn(shiftId: string, staffId: string): Promise<ShiftResponseDto> {
+    const shift = await this.findEntityWithRelations(shiftId);
     if (shift.staffId !== staffId) {
       throw new ForbiddenException('You can only clock in to your own shift');
     }
@@ -119,13 +90,11 @@ export class ShiftsService {
     shift.actualClockIn = new Date();
     shift.status = ShiftStatus.IN_PROGRESS;
     await this.shiftRepo.save(shift);
-    return this.toResponseDto(shift);
+    return ShiftResponseDto.from(shift);
   }
 
-  async clockOut(shiftId: string, staffId: string) {
-    const shift = await this.shiftRepo.findOne({ where: { id: shiftId }, relations: ['staff', 'role'] });
-    if (!shift) throw new NotFoundException('Shift not found');
-
+  async clockOut(shiftId: string, staffId: string): Promise<ShiftResponseDto> {
+    const shift = await this.findEntityWithRelations(shiftId);
     if (shift.staffId !== staffId) {
       throw new ForbiddenException('You can only clock out of your own shift');
     }
@@ -136,6 +105,6 @@ export class ShiftsService {
     shift.actualClockOut = new Date();
     shift.status = ShiftStatus.COMPLETED;
     await this.shiftRepo.save(shift);
-    return this.toResponseDto(shift);
+    return ShiftResponseDto.from(shift);
   }
 }

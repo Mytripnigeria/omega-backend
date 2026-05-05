@@ -5,6 +5,7 @@ import {
   PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { ApiProperty } from '@nestjs/swagger';
 
 export interface NotificationChannels {
   email: boolean;
@@ -40,18 +41,40 @@ const DEFAULT_EVENTS: NotificationEventToggles = {
 
 @Entity('notification_preferences')
 export class NotificationPreferenceEntity {
+  @ApiProperty({ format: 'uuid', example: '3a1b2c3d-1234-4f1a-8c3e-9a4f0c4e2b21' })
   @PrimaryColumn('uuid')
   adminId: string;
 
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    example: { email: true, sms: false, push: true, doNotDisturb: false },
+    description: 'Delivery channel preferences. `doNotDisturb` disables all channels during quiet hours.',
+  })
   @Column({ type: 'jsonb', default: () => `'${JSON.stringify(DEFAULT_CHANNELS)}'::jsonb` })
   channels: NotificationChannels;
 
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    example: {
+      newOrder: true,
+      newCustomer: false,
+      lowStock: true,
+      dailyReport: true,
+      paymentReceived: true,
+      shiftReminder: false,
+    },
+    description: 'Per-event notification toggles.',
+  })
   @Column({ type: 'jsonb', default: () => `'${JSON.stringify(DEFAULT_EVENTS)}'::jsonb` })
   events: NotificationEventToggles;
 
+  @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn()
   createdAt: Date;
 
+  @ApiProperty({ type: String, format: 'date-time' })
   @UpdateDateColumn()
   updatedAt: Date;
 }
