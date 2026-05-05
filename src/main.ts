@@ -10,12 +10,14 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   const configService = app.get(ConfigService);
-  const allowedOrigins = configService.get<string[]>('allowedOrigins') ?? [];
   const port = configService.get<number>('port') ?? 3000;
   const nodeEnv = process.env.NODE_ENV ?? 'development';
 
+  // Reflect the request's Origin header so any origin is allowed while still
+  // satisfying browsers that require an explicit origin (not `*`) when
+  // credentials are sent.
   app.enableCors({
-    origin: allowedOrigins.length > 0 ? allowedOrigins : true,
+    origin: (_origin, callback) => callback(null, true),
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   });
