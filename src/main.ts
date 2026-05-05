@@ -13,11 +13,11 @@ async function bootstrap() {
   const port = configService.get<number>('port') ?? 3000;
   const nodeEnv = process.env.NODE_ENV ?? 'development';
 
-  // Reflect the request's Origin header so any origin is allowed while still
-  // satisfying browsers that require an explicit origin (not `*`) when
-  // credentials are sent.
+  // `origin: true` reflects the request's Origin header — required for
+  // credentialed requests since browsers reject `Access-Control-Allow-Origin: *`
+  // when `credentials: true`.
   app.enableCors({
-    origin: (_origin, callback) => callback(null, true),
+    origin: true,
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   });
