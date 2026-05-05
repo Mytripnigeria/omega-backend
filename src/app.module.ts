@@ -24,6 +24,8 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { DomainsModule } from './modules/domains/domains.module';
 import { NotificationPreferencesModule } from './modules/notification-preferences/notification-preferences.module';
 import { ActivityLogModule } from './modules/activity-log/activity-log.module';
+import { OrdersModule } from './modules/orders/orders.module';
+import { DeliveriesModule } from './modules/deliveries/deliveries.module';
 
 @Module({
   imports: [
@@ -55,6 +57,8 @@ import { ActivityLogModule } from './modules/activity-log/activity-log.module';
     DomainsModule,
     NotificationPreferencesModule,
     ActivityLogModule,
+    OrdersModule,
+    DeliveriesModule,
   ],
 })
 export class AppModule {}
