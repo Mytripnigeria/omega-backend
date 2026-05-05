@@ -12,12 +12,14 @@ import { UpdateShiftDto } from './dto/update-shift.dto';
 import { ShiftFilterDto } from './dto/shift-filter.dto';
 import { ShiftResponseDto } from './dto/shift-response.dto';
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
+import { ActivityLogService } from '../activity-log/activity-log.service';
 
 @Injectable()
 export class ShiftsService {
   constructor(
     @InjectRepository(ShiftEntity)
     private readonly shiftRepo: Repository<ShiftEntity>,
+    private readonly activityLog: ActivityLogService,
   ) {}
 
   async create(dto: CreateShiftDto): Promise<ShiftResponseDto> {
@@ -78,9 +80,12 @@ export class ShiftsService {
     await this.shiftRepo.delete(id);
   }
 
-  async clockIn(shiftId: string, staffId: string): Promise<ShiftResponseDto> {
+  async clockIn(
+    shiftId: string,
+    staff: { sub: string; businessId: string; storeId: string },
+  ): Promise<ShiftResponseDto> {
     const shift = await this.findEntityWithRelations(shiftId);
-    if (shift.staffId !== staffId) {
+    if (shift.staffId !== staff.sub) {
       throw new ForbiddenException('You can only clock in to your own shift');
     }
     if (shift.status !== ShiftStatus.SCHEDULED) {
@@ -90,12 +95,30 @@ export class ShiftsService {
     shift.actualClockIn = new Date();
     shift.status = ShiftStatus.IN_PROGRESS;
     await this.shiftRepo.save(shift);
+
+    this.activityLog.record({
+      actorType: 'staff',
+      actorId: staff.sub,
+      actorName: shift.staff
+        ? `${shift.staff.firstName} ${shift.staff.lastName}`
+        : 'Staff',
+      action: 'shift.clocked_in',
+      businessId: staff.businessId,
+      storeId: shift.storeId,
+      resourceType: 'shift',
+      resourceId: shift.id,
+      metadata: { date: shift.date, scheduledStart: shift.startTime },
+    });
+
     return ShiftResponseDto.from(shift);
   }
 
-  async clockOut(shiftId: string, staffId: string): Promise<ShiftResponseDto> {
+  async clockOut(
+    shiftId: string,
+    staff: { sub: string; businessId: string; storeId: string },
+  ): Promise<ShiftResponseDto> {
     const shift = await this.findEntityWithRelations(shiftId);
-    if (shift.staffId !== staffId) {
+    if (shift.staffId !== staff.sub) {
       throw new ForbiddenException('You can only clock out of your own shift');
     }
     if (shift.status !== ShiftStatus.IN_PROGRESS) {
@@ -105,6 +128,28 @@ export class ShiftsService {
     shift.actualClockOut = new Date();
     shift.status = ShiftStatus.COMPLETED;
     await this.shiftRepo.save(shift);
+
+    const durationMs = shift.actualClockIn
+      ? shift.actualClockOut.getTime() - new Date(shift.actualClockIn).getTime()
+      : null;
+
+    this.activityLog.record({
+      actorType: 'staff',
+      actorId: staff.sub,
+      actorName: shift.staff
+        ? `${shift.staff.firstName} ${shift.staff.lastName}`
+        : 'Staff',
+      action: 'shift.clocked_out',
+      businessId: staff.businessId,
+      storeId: shift.storeId,
+      resourceType: 'shift',
+      resourceId: shift.id,
+      metadata: {
+        date: shift.date,
+        durationMinutes: durationMs ? Math.round(durationMs / 60000) : null,
+      },
+    });
+
     return ShiftResponseDto.from(shift);
   }
 }

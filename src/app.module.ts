@@ -23,6 +23,7 @@ import { PrintersModule } from './modules/printers/printers.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { DomainsModule } from './modules/domains/domains.module';
 import { NotificationPreferencesModule } from './modules/notification-preferences/notification-preferences.module';
+import { ActivityLogModule } from './modules/activity-log/activity-log.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { NotificationPreferencesModule } from './modules/notification-preference
     WebhooksModule,
     DomainsModule,
     NotificationPreferencesModule,
+    ActivityLogModule,
   ],
 })
 export class AppModule {}

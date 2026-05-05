@@ -8,6 +8,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { AdminService } from '../admin/admin.service';
 import { StaffService } from '../staff/staff.service';
+import { ActivityLogService } from '../activity-log/activity-log.service';
 import { AdminLoginDto } from './dto/admin-login.dto';
 import { StaffLookupDto } from './dto/staff-lookup.dto';
 import { StaffPinLoginDto } from './dto/staff-pin-login.dto';
@@ -24,6 +25,7 @@ export class AuthService {
     private readonly staffService: StaffService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly activityLog: ActivityLogService,
   ) {}
 
   async adminLogin(dto: AdminLoginDto) {
@@ -55,6 +57,16 @@ export class AuthService {
     const saltRounds = this.configService.get<number>('bcryptSaltRounds') ?? 10;
     const hashedRefresh = await bcrypt.hash(refreshToken, saltRounds);
     await this.adminService.updateRefreshToken(admin.id, hashedRefresh);
+
+    this.activityLog.record({
+      actorType: 'admin',
+      actorId: admin.id,
+      actorName: admin.fullName,
+      action: 'admin.logged_in',
+      businessId: admin.businessId,
+      resourceType: 'admin',
+      resourceId: admin.id,
+    });
 
     return {
       accessToken,
@@ -105,6 +117,18 @@ export class AuthService {
 
   async adminLogout(adminId: string): Promise<void> {
     await this.adminService.updateRefreshToken(adminId, null);
+    const admin = await this.adminService.findById(adminId).catch(() => null);
+    if (admin) {
+      this.activityLog.record({
+        actorType: 'admin',
+        actorId: admin.id,
+        actorName: admin.fullName,
+        action: 'admin.logged_out',
+        businessId: admin.businessId,
+        resourceType: 'admin',
+        resourceId: admin.id,
+      });
+    }
   }
 
   async staffLookup(dto: StaffLookupDto) {
@@ -155,6 +179,18 @@ export class AuthService {
       secret: this.configService.get<string>('jwt.staffSecret') as string,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expiresIn: this.configService.get('jwt.staffExpiresIn') as any,
+    });
+
+    this.activityLog.record({
+      actorType: 'staff',
+      actorId: staff.id,
+      actorName: `${staff.firstName} ${staff.lastName}`,
+      action: 'staff.logged_in',
+      businessId,
+      storeId: staff.storeId,
+      resourceType: 'staff',
+      resourceId: staff.id,
+      metadata: { staffCode: staff.staffCode, roleName: staff.role?.name ?? null },
     });
 
     return {

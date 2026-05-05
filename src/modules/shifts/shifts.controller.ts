@@ -105,7 +105,7 @@ export class ShiftsController {
   @UseGuards(StaffJwtGuard)
   @Post(':id/clock-in')
   clockIn(@Param('id') id: string, @CurrentStaff() staff: StaffJwtPayload) {
-    return this.shiftsService.clockIn(id, staff.sub);
+    return this.shiftsService.clockIn(id, staff);
   }
 
   @ApiOperation({
@@ -118,6 +118,6 @@ export class ShiftsController {
   @UseGuards(StaffJwtGuard)
   @Post(':id/clock-out')
   clockOut(@Param('id') id: string, @CurrentStaff() staff: StaffJwtPayload) {
-    return this.shiftsService.clockOut(id, staff.sub);
+    return this.shiftsService.clockOut(id, staff);
   }
 }

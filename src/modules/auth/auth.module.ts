@@ -8,6 +8,7 @@ import { AdminJwtStrategy } from './strategies/admin-jwt.strategy';
 import { StaffJwtStrategy } from './strategies/staff-jwt.strategy';
 import { AdminModule } from '../admin/admin.module';
 import { StaffModule } from '../staff/staff.module';
+import { ActivityLogModule } from '../activity-log/activity-log.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { StaffModule } from '../staff/staff.module';
     JwtModule.register({}),
     AdminModule,
     StaffModule,
+    ActivityLogModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, SecurityService, AdminJwtStrategy, StaffJwtStrategy],
