@@ -83,8 +83,37 @@ export class ShiftEntity {
   actualClockOut: Date;
 
   @ApiPropertyOptional({ example: 'Cover for sick leave', nullable: true })
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   notes: string;
+
+  @ApiPropertyOptional({
+    type: 'array',
+    nullable: true,
+    description: 'Per-shift checklist categories with task completion state',
+    items: {
+      type: 'object',
+      additionalProperties: true,
+      example: {
+        id: 'opening',
+        name: 'Opening Tasks',
+        items: [
+          { id: '1', task: 'Turn on equipment', completed: false, priority: 'high' },
+        ],
+      },
+    },
+  })
+  @Column({ type: 'jsonb', nullable: true })
+  checklist: Array<{
+    id: string;
+    name: string;
+    items: Array<{
+      id: string;
+      task: string;
+      completed: boolean;
+      priority: 'high' | 'medium' | 'low';
+      completedAt?: string;
+    }>;
+  }> | null;
 
   @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn()

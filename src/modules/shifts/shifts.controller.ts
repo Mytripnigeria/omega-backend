@@ -120,4 +120,27 @@ export class ShiftsController {
   clockOut(@Param('id') id: string, @CurrentStaff() staff: StaffJwtPayload) {
     return this.shiftsService.clockOut(id, staff);
   }
+
+  @ApiOperation({
+    summary: 'Update shift checklist',
+    description:
+      'Staff-authenticated. Persists the per-shift checklist (categories with task ' +
+      'completion state) on the shift\'s `checklist` jsonb. Caller must own the shift.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiOkResponse({ type: ShiftResponseDto })
+  @ApiBearerAuth()
+  @UseGuards(StaffJwtGuard)
+  @Patch(':id/checklist')
+  updateChecklist(
+    @Param('id') id: string,
+    @CurrentStaff() staff: StaffJwtPayload,
+    @Body('checklist') checklist: unknown,
+  ) {
+    return this.shiftsService.updateChecklist(
+      id,
+      staff,
+      checklist as Parameters<typeof this.shiftsService.updateChecklist>[2],
+    );
+  }
 }

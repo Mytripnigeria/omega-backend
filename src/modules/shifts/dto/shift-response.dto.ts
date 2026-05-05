@@ -61,6 +61,20 @@ export class ShiftResponseDto {
   @Expose()
   notes: string | null;
 
+  @ApiPropertyOptional({ type: 'array', nullable: true })
+  @Expose()
+  checklist: Array<{
+    id: string;
+    name: string;
+    items: Array<{
+      id: string;
+      task: string;
+      completed: boolean;
+      priority: 'high' | 'medium' | 'low';
+      completedAt?: string;
+    }>;
+  }> | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)

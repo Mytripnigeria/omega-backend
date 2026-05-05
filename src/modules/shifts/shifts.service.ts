@@ -113,6 +113,20 @@ export class ShiftsService {
     return ShiftResponseDto.from(shift);
   }
 
+  async updateChecklist(
+    shiftId: string,
+    staff: { sub: string; businessId: string; storeId: string },
+    checklist: ShiftEntity['checklist'],
+  ): Promise<ShiftResponseDto> {
+    const shift = await this.findEntityWithRelations(shiftId);
+    if (shift.staffId !== staff.sub) {
+      throw new ForbiddenException('You can only update your own shift checklist');
+    }
+    shift.checklist = checklist ?? null;
+    await this.shiftRepo.save(shift);
+    return ShiftResponseDto.from(shift);
+  }
+
   async clockOut(
     shiftId: string,
     staff: { sub: string; businessId: string; storeId: string },

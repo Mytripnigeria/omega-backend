@@ -26,6 +26,8 @@ import { NotificationPreferencesModule } from './modules/notification-preference
 import { ActivityLogModule } from './modules/activity-log/activity-log.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { DeliveriesModule } from './modules/deliveries/deliveries.module';
+import { ExpensesModule } from './modules/expenses/expenses.module';
+import { ReportsModule } from './modules/reports/reports.module';
 
 @Module({
   imports: [
@@ -59,6 +61,8 @@ import { DeliveriesModule } from './modules/deliveries/deliveries.module';
     ActivityLogModule,
     OrdersModule,
     DeliveriesModule,
+    ExpensesModule,
+    ReportsModule,
   ],
 })
 export class AppModule {}
