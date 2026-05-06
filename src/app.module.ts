@@ -36,6 +36,7 @@ import { StockTransfersModule } from './modules/stock-transfers/stock-transfers.
 import { EquipmentModule } from './modules/equipment/equipment.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { BookingsModule } from './modules/bookings/bookings.module';
+import { StorefrontModule } from './modules/storefront/storefront.module';
 
 @Module({
   imports: [
@@ -79,6 +80,7 @@ import { BookingsModule } from './modules/bookings/bookings.module';
     EquipmentModule,
     SuppliersModule,
     BookingsModule,
+    StorefrontModule,
   ],
 })
 export class AppModule {}
