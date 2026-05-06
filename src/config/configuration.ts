@@ -28,4 +28,10 @@ export default () => ({
     publicUrlBase: (process.env.S3_PUBLIC_URL_BASE ?? '').replace(/\/$/, ''),
     forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
   },
+  paystack: {
+    secretKey: process.env.PAYSTACK_SECRET_KEY ?? '',
+    publicKey: process.env.PAYSTACK_PUBLIC_KEY ?? '',
+    baseUrl: process.env.PAYSTACK_BASE_URL ?? 'https://api.paystack.co',
+    webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET ?? process.env.PAYSTACK_SECRET_KEY ?? '',
+  },
 });

@@ -155,6 +155,50 @@ export class OrderResponseDto {
   @Type(() => Date)
   paidAt: Date | null;
 
+  @ApiPropertyOptional({ enum: ['pending', 'paid', 'failed', 'refunded'], nullable: true })
+  @Expose()
+  paymentStatus: 'pending' | 'paid' | 'failed' | 'refunded' | null;
+
+  @ApiPropertyOptional({
+    enum: ['cash', 'card', 'wallet', 'points', 'paystack'],
+    nullable: true,
+  })
+  @Expose()
+  paymentChannel: 'cash' | 'card' | 'wallet' | 'points' | 'paystack' | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
+  paymentReference: string | null;
+
+  @ApiProperty({ example: 0 })
+  @Expose()
+  deliveryFee: number;
+
+  @ApiProperty({ example: 0 })
+  @Expose()
+  tipAmount: number;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
+  couponCode: string | null;
+
+  @ApiProperty({ example: 0 })
+  @Expose()
+  couponDiscount: number;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @Expose()
+  deliveryAddressId: string | null;
+
+  @ApiPropertyOptional({ type: 'object', additionalProperties: true, nullable: true })
+  @Expose()
+  deliveryAddress: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
+  @Expose()
+  @Type(() => Date)
+  scheduledFor: Date | null;
+
   @ApiPropertyOptional({ nullable: true })
   @Expose()
   notes: string | null;
@@ -185,6 +229,9 @@ export class OrderResponseDto {
         discountAmount: Number(entity.discountAmount),
         total: Number(entity.total),
         paidAmount: Number(entity.paidAmount),
+        deliveryFee: Number(entity.deliveryFee ?? 0),
+        tipAmount: Number(entity.tipAmount ?? 0),
+        couponDiscount: Number(entity.couponDiscount ?? 0),
         items: (entity.items ?? []).map((i) => ({
           ...i,
           unitPrice: Number(i.unitPrice),

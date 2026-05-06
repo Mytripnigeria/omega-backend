@@ -37,6 +37,12 @@ import { EquipmentModule } from './modules/equipment/equipment.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { BookingsModule } from './modules/bookings/bookings.module';
 import { StorefrontModule } from './modules/storefront/storefront.module';
+import { PublicStorefrontModule } from './modules/public-storefront/public-storefront.module';
+import { CustomerAddressesModule } from './modules/customer-addresses/customer-addresses.module';
+import { CustomerPaymentMethodsModule } from './modules/customer-payment-methods/customer-payment-methods.module';
+import { CouponsModule } from './modules/coupons/coupons.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
+import { PaystackModule } from './modules/paystack/paystack.module';
 
 @Module({
   imports: [
@@ -81,6 +87,12 @@ import { StorefrontModule } from './modules/storefront/storefront.module';
     SuppliersModule,
     BookingsModule,
     StorefrontModule,
+    PublicStorefrontModule,
+    PaystackModule,
+    CustomerAddressesModule,
+    CustomerPaymentMethodsModule,
+    CouponsModule,
+    ReviewsModule,
   ],
 })
 export class AppModule {}

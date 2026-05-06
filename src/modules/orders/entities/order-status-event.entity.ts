@@ -31,9 +31,9 @@ export class OrderStatusEventEntity {
   @Column({ type: 'uuid', nullable: true })
   actorId: string | null;
 
-  @ApiPropertyOptional({ enum: ['admin', 'staff', 'system'], nullable: true })
+  @ApiPropertyOptional({ enum: ['admin', 'staff', 'user', 'system'], nullable: true })
   @Column({ type: 'varchar', nullable: true })
-  actorType: 'admin' | 'staff' | 'system' | null;
+  actorType: 'admin' | 'staff' | 'user' | 'system' | null;
 
   @ApiPropertyOptional({ nullable: true })
   @Column({ type: 'text', nullable: true })

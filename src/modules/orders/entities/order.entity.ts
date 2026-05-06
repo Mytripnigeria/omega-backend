@@ -111,6 +111,75 @@ export class OrderEntity {
   @Column({ type: 'timestamptz', nullable: true })
   paidAt: Date | null;
 
+  @ApiPropertyOptional({
+    enum: ['pending', 'paid', 'failed', 'refunded'],
+    default: 'pending',
+    nullable: true,
+  })
+  @Column({
+    type: 'enum',
+    enum: ['pending', 'paid', 'failed', 'refunded'],
+    default: 'pending',
+    nullable: true,
+  })
+  paymentStatus: 'pending' | 'paid' | 'failed' | 'refunded' | null;
+
+  @ApiPropertyOptional({
+    enum: ['cash', 'card', 'wallet', 'points', 'paystack'],
+    nullable: true,
+  })
+  @Column({
+    type: 'enum',
+    enum: ['cash', 'card', 'wallet', 'points', 'paystack'],
+    nullable: true,
+  })
+  paymentChannel: 'cash' | 'card' | 'wallet' | 'points' | 'paystack' | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Paystack transaction reference',
+  })
+  @Column({ type: 'varchar', nullable: true })
+  paymentReference: string | null;
+
+  @ApiPropertyOptional({ example: 1500, nullable: true })
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
+  deliveryFee: number;
+
+  @ApiPropertyOptional({ example: 500, nullable: true })
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
+  tipAmount: number;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
+  couponCode: string | null;
+
+  @ApiPropertyOptional({ example: 1000, nullable: true })
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
+  couponDiscount: number;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @Column({ type: 'uuid', nullable: true })
+  deliveryAddressId: string | null;
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: true,
+    nullable: true,
+    description: 'Snapshot of the delivery address at order time',
+  })
+  @Column({ type: 'jsonb', nullable: true })
+  deliveryAddress: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description: 'Scheduled time (null = ASAP)',
+  })
+  @Column({ type: 'timestamptz', nullable: true })
+  scheduledFor: Date | null;
+
   @ApiPropertyOptional({ nullable: true })
   @Column({ type: 'text', nullable: true })
   notes: string | null;
