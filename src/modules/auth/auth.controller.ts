@@ -1,4 +1,12 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiTags,
   ApiBearerAuth,
@@ -24,6 +32,7 @@ import { Req } from '@nestjs/common';
 import { UserJwtPayload } from '../../common/types/jwt-payload.types';
 import {
   AdminLoginResponseDto,
+  AdminProfileDto,
   AdminRefreshResponseDto,
   StaffLookupResponseDto,
   StaffLoginResponseDto,
@@ -62,6 +71,18 @@ export class AuthController {
   @Post('admin/refresh')
   adminRefresh(@Body() dto: RefreshTokenDto) {
     return this.authService.adminRefresh(dto);
+  }
+
+  @ApiOperation({
+    summary: 'Current admin profile',
+    description: 'Returns the admin record matching the bearer token.',
+  })
+  @ApiOkResponse({ type: AdminProfileDto })
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Get('admin/me')
+  adminMe(@CurrentAdmin() admin: AdminJwtPayload) {
+    return this.authService.adminMe(admin.sub);
   }
 
   @ApiOperation({

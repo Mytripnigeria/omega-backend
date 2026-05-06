@@ -114,6 +114,7 @@ export class StorefrontCouponsController {
       user.customerId,
       dto.code,
       dto.subtotal,
+      dto.items ?? [],
     );
   }
 }
@@ -137,6 +138,12 @@ export class PublicCouponsController {
     @Body() dto: ValidateCouponDto,
   ) {
     if (!businessId) throw new BadRequestException('businessId is required');
-    return this.service.validate(businessId, null, dto.code, dto.subtotal);
+    return this.service.validate(
+      businessId,
+      null,
+      dto.code,
+      dto.subtotal,
+      dto.items ?? [],
+    );
   }
 }

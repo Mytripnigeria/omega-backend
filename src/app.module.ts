@@ -43,6 +43,10 @@ import { CustomerPaymentMethodsModule } from './modules/customer-payment-methods
 import { CouponsModule } from './modules/coupons/coupons.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
 import { PaystackModule } from './modules/paystack/paystack.module';
+import { FinancialTransactionsModule } from './modules/financial-transactions/financial-transactions.module';
+import { CashSessionsModule } from './modules/cash-sessions/cash-sessions.module';
+import { LoyaltyModule } from './modules/loyalty/loyalty.module';
+import { ReferralsModule } from './modules/referrals/referrals.module';
 
 @Module({
   imports: [
@@ -93,6 +97,10 @@ import { PaystackModule } from './modules/paystack/paystack.module';
     CustomerPaymentMethodsModule,
     CouponsModule,
     ReviewsModule,
+    FinancialTransactionsModule,
+    CashSessionsModule,
+    LoyaltyModule,
+    ReferralsModule,
   ],
 })
 export class AppModule {}

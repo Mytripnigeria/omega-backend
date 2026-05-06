@@ -13,6 +13,7 @@ import {
   DashboardSummaryFilterDto,
   ReportsRangeDto,
   SalesReportFilterDto,
+  TopProductsFilterDto,
 } from './dto/reports-filter.dto';
 import {
   DashboardSummaryDto,
@@ -20,6 +21,7 @@ import {
   KitchenStatsDto,
   SalesReportDto,
   StaffPerformanceDto,
+  TopProductsReportDto,
 } from './dto/reports-response.dto';
 
 interface AuthedRequest extends Request {
@@ -105,12 +107,27 @@ export class ReportsController {
   @ApiOperation({
     summary: 'Dashboard summary',
     description:
-      'Today-snapshot KPIs: orders/revenue today, open orders, active shifts, low-stock ' +
-      'count, pending expenses, deliveries in transit.',
+      'Today-snapshot KPIs plus customer/loyalty/cash-session aggregates and a yesterday ' +
+      'revenue baseline so the UI can render a delta against the same window yesterday.',
   })
   @ApiOkResponse({ type: DashboardSummaryDto })
   @Get('dashboard')
   dashboard(@Req() req: AuthedRequest, @Query() filter: DashboardSummaryFilterDto) {
     return this.service.getDashboardSummary(actorFrom(req), filter);
+  }
+
+  @ApiOperation({
+    summary: 'Top products',
+    description:
+      'Best-selling products by revenue inside the date range. Joins order_items to ' +
+      'orders to capture units, distinct orders, and revenue per product.',
+  })
+  @ApiOkResponse({ type: TopProductsReportDto })
+  @Get('top-products')
+  topProducts(
+    @Req() req: AuthedRequest,
+    @Query() filter: TopProductsFilterDto,
+  ) {
+    return this.service.getTopProducts(actorFrom(req), filter);
   }
 }

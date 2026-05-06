@@ -28,6 +28,7 @@ import {
   paginate,
 } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
 
 interface CustomerActor {
   sub: string;
@@ -48,6 +49,7 @@ export class CustomersService {
     private readonly pointsRepo: Repository<PointsTransactionEntity>,
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
+    private readonly ledger: FinancialTransactionsService,
   ) {}
 
   private generateReferralCode(): string {
@@ -259,6 +261,25 @@ export class CustomersService {
       });
       const saved = await mgr.getRepository(WalletTransactionEntity).save(tx);
 
+      await this.ledger.record(
+        {
+          businessId: actor.businessId,
+          type: 'credit',
+          purpose: 'wallet_credit',
+          amount,
+          method: 'wallet',
+          reference: reference ?? null,
+          description: description || `Wallet credit ${customer.firstName ?? ''}`.trim(),
+          linkedType: 'wallet_tx',
+          linkedId: saved.id,
+          customerId,
+          customerName: `${customer.firstName ?? ''} ${customer.lastName ?? ''}`.trim() || null,
+          staffId: actor.sub,
+          staffName: actor.email ?? null,
+        },
+        mgr,
+      );
+
       this.activityLog.record({
         actorType: 'admin',
         actorId: actor.sub,
@@ -304,6 +325,25 @@ export class CustomersService {
         reference: reference ?? null,
       });
       const saved = await mgr.getRepository(WalletTransactionEntity).save(tx);
+
+      await this.ledger.record(
+        {
+          businessId: actor.businessId,
+          type: 'debit',
+          purpose: 'wallet_debit',
+          amount,
+          method: 'wallet',
+          reference: reference ?? null,
+          description: description || `Wallet debit ${customer.firstName ?? ''}`.trim(),
+          linkedType: 'wallet_tx',
+          linkedId: saved.id,
+          customerId,
+          customerName: `${customer.firstName ?? ''} ${customer.lastName ?? ''}`.trim() || null,
+          staffId: actor.sub,
+          staffName: actor.email ?? null,
+        },
+        mgr,
+      );
 
       this.activityLog.record({
         actorType: 'admin',

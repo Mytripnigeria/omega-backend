@@ -19,6 +19,7 @@ import { ExpenseResponseDto } from './dto/expense-response.dto';
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { StorageService } from '../storage/storage.service';
+import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
 
 interface ActorContext {
   sub: string;
@@ -37,6 +38,7 @@ export class ExpensesService {
     private readonly staffRepo: Repository<StaffEntity>,
     private readonly activityLog: ActivityLogService,
     private readonly storage: StorageService,
+    private readonly ledger: FinancialTransactionsService,
   ) {}
 
   async create(actor: ActorContext, dto: CreateExpenseDto): Promise<ExpenseResponseDto> {
@@ -273,6 +275,20 @@ export class ExpensesService {
     expense.paidAt = new Date();
     if (dto.paymentMethodId) expense.paymentMethodId = dto.paymentMethodId;
     await this.repo.save(expense);
+
+    await this.ledger.record({
+      businessId: actor.businessId,
+      storeId: expense.storeId,
+      type: 'debit',
+      purpose: 'expense_payment',
+      amount: Number(expense.amount),
+      method: 'other',
+      description: `Expense paid: ${expense.description}`,
+      linkedType: 'expense',
+      linkedId: expense.id,
+      staffId: actor.sub,
+      staffName: actor.actorName ?? null,
+    });
 
     this.activityLog.record({
       actorType: 'admin',

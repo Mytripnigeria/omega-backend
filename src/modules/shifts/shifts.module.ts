@@ -4,9 +4,14 @@ import { ShiftEntity } from './entities/shift.entity';
 import { ShiftsService } from './shifts.service';
 import { ShiftsController } from './shifts.controller';
 import { ActivityLogModule } from '../activity-log/activity-log.module';
+import { CashSessionsModule } from '../cash-sessions/cash-sessions.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ShiftEntity]), ActivityLogModule],
+  imports: [
+    TypeOrmModule.forFeature([ShiftEntity]),
+    ActivityLogModule,
+    CashSessionsModule,
+  ],
   controllers: [ShiftsController],
   providers: [ShiftsService],
   exports: [ShiftsService],

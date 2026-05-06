@@ -29,6 +29,7 @@ import {
   CancelOrderDto,
   OrderFilterDto,
   RecordPaymentDto,
+  RefundOrderDto,
   UpdateOrderStatusDto,
   UpdatePrepStatusDto,
 } from './dto/order-filter.dto';
@@ -36,6 +37,7 @@ import {
   OrderItemResponseDto,
   OrderResponseDto,
 } from './dto/order-response.dto';
+import { OrderStatusEventResponseDto } from './dto/order-status-event-response.dto';
 
 interface AuthedRequest extends Request {
   user?: JwtPayload;
@@ -182,6 +184,36 @@ export class OrdersController {
     @Body() dto: RecordPaymentDto,
   ) {
     return this.service.recordPayment(actorFrom(req), id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Refund an order',
+    description:
+      'Issues a partial or full refund. Validates amount ≤ paidAmount - refundedAmount. ' +
+      'Creates a debit row in the financial ledger and an order status event.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiOkResponse({ type: OrderResponseDto })
+  @Post(':id/refund')
+  refund(
+    @Req() req: AuthedRequest,
+    @Param('id') id: string,
+    @Body() dto: RefundOrderDto,
+  ) {
+    return this.service.refund(actorFrom(req), id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Order status timeline',
+    description:
+      'Returns every status transition (and refund/cancellation events) for the order in chronological order.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiOkResponse({ type: [OrderStatusEventResponseDto] })
+  @Get(':id/events')
+  async events(@Req() req: AuthedRequest, @Param('id') id: string) {
+    const events = await this.service.getEvents(actorFrom(req), id);
+    return events.map(OrderStatusEventResponseDto.from);
   }
 
   @ApiOperation({

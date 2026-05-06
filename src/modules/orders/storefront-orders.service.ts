@@ -28,7 +28,16 @@ import {
 import { CustomersService } from '../customers/customers.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { CouponsService } from '../coupons/coupons.service';
+import { LoyaltyService } from '../loyalty/loyalty.service';
+import { ReferralsService } from '../referrals/referrals.service';
+import { ProductEntity } from '../products/entities/product.entity';
+import {
+  PointsTransactionEntity,
+  PointsTransactionType,
+} from '../customers/entities/wallet-transaction.entity';
 import { PaystackService } from '../paystack/paystack.service';
+import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
+import { TransactionMethod } from '../financial-transactions/entities/financial-transaction.entity';
 import { UserJwtPayload } from '../../common/types/jwt-payload.types';
 
 export interface PlaceOrderResult {
@@ -57,12 +66,28 @@ export class StorefrontOrdersService {
     private readonly addressRepo: Repository<CustomerAddressEntity>,
     @InjectRepository(CustomerPaymentMethodEntity)
     private readonly paymentMethodRepo: Repository<CustomerPaymentMethodEntity>,
+    @InjectRepository(ProductEntity)
+    private readonly productRepo: Repository<ProductEntity>,
     private readonly dataSource: DataSource,
     private readonly customersService: CustomersService,
     private readonly couponsService: CouponsService,
     private readonly activityLog: ActivityLogService,
     private readonly paystack: PaystackService,
+    private readonly ledger: FinancialTransactionsService,
+    private readonly loyalty: LoyaltyService,
+    private readonly referrals: ReferralsService,
   ) {}
+
+  private mapPaymentChannelToMethod(
+    ch: OrderEntity['paymentChannel'] | null | undefined,
+  ): TransactionMethod {
+    if (ch === 'paystack') return 'paystack';
+    if (ch === 'card') return 'card';
+    if (ch === 'cash') return 'cash';
+    if (ch === 'wallet') return 'wallet';
+    if (ch === 'points') return 'points';
+    return 'other';
+  }
 
   async place(
     user: UserJwtPayload,
@@ -149,12 +174,34 @@ export class StorefrontOrdersService {
     let couponDiscount = 0;
     let couponCode: string | null = null;
     if (dto.couponCode) {
+      // Resolve product → category for targeting checks.
+      const productIds = dto.items
+        .map((i) => i.productId)
+        .filter((id): id is string => !!id);
+      const products = productIds.length
+        ? await this.productRepo.find({
+            where: productIds.map((id) => ({ id })),
+            select: ['id', 'categoryId'],
+          })
+        : [];
+      const categoryByProduct = new Map(
+        products.map((p) => [p.id, p.categoryId]),
+      );
+      const couponItems = dto.items.map((i) => ({
+        productId: i.productId ?? null,
+        categoryId: i.productId
+          ? (categoryByProduct.get(i.productId) ?? null)
+          : null,
+        lineTotal: Number(i.unitPrice) * i.quantity,
+      }));
+
       const result = await this.couponsService.redeem(
         user.businessId,
         user.customerId,
         dto.couponCode,
         subtotal,
         null,
+        couponItems,
       );
       couponDiscount = result.discountAmount;
       couponCode = result.coupon.code;
@@ -437,11 +484,98 @@ export class StorefrontOrdersService {
   private async markOrderPaid(orderId: string, reference: string): Promise<void> {
     const order = await this.orderRepo.findOne({ where: { id: orderId } });
     if (!order) return;
+    if (order.paymentStatus === 'paid') return;
+    const previouslyPaid = Number(order.paidAmount ?? 0);
+    const total = Number(order.total);
+    const delta = Math.max(0, total - previouslyPaid);
     order.paymentStatus = 'paid';
     order.paymentReference = reference;
     order.paidAt = new Date();
-    order.paidAmount = Number(order.total);
+    order.paidAmount = total;
     await this.orderRepo.save(order);
+
+    if (delta > 0) {
+      await this.ledger.record({
+        businessId: order.businessId,
+        storeId: order.storeId,
+        type: 'credit',
+        purpose: 'order_payment',
+        amount: delta,
+        method: this.mapPaymentChannelToMethod(order.paymentChannel),
+        reference,
+        description: `Order #${order.orderNumber} payment (storefront)`,
+        linkedType: 'order',
+        linkedId: order.id,
+        customerId: order.customerId,
+        customerName: order.customerName,
+      });
+    }
+
+    // Award loyalty points + unlock any pending referral reward.
+    if (order.customerId) {
+      try {
+        const settings = await this.loyalty.getSettings(order.businessId);
+        const earned = Math.floor(
+          Number(order.total) * Number(settings.pointsPerNaira ?? 0),
+        );
+        if (earned > 0) {
+          await this.awardPointsForOrder(
+            order.customerId,
+            order.businessId,
+            earned,
+            order.id,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          `Loyalty points award failed for order ${order.id}: ${(err as Error).message}`,
+        );
+      }
+      try {
+        await this.referrals.recordFirstPurchase(
+          order.businessId,
+          order.customerId,
+          order.id,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Referral reward release failed for order ${order.id}: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Credit loyalty points to the customer and write a transaction log.
+   * Mirrors CustomersService.addPoints but lets us run inside any transaction
+   * boundary; uses the customer repository directly to avoid the actor-context
+   * required by the customers module.
+   */
+  private async awardPointsForOrder(
+    customerId: string,
+    businessId: string,
+    points: number,
+    orderId: string,
+  ): Promise<void> {
+    await this.dataSource.transaction(async (mgr) => {
+      const customer = await mgr
+        .getRepository(CustomerEntity)
+        .findOne({ where: { id: customerId, businessId } });
+      if (!customer) return;
+      customer.points = Number(customer.points) + points;
+      await mgr.getRepository(CustomerEntity).save(customer);
+
+      await mgr.getRepository(PointsTransactionEntity).save(
+        mgr.getRepository(PointsTransactionEntity).create({
+          customerId,
+          type: PointsTransactionType.EARNED,
+          points,
+          balance: customer.points,
+          description: `Earned for order paid`,
+          orderId,
+        }),
+      );
+    });
   }
 
   private async markOrderFailed(orderId: string): Promise<void> {

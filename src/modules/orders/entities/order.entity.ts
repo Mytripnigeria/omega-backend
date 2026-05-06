@@ -103,6 +103,10 @@ export class OrderEntity {
   @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
   paidAmount: number;
 
+  @ApiProperty({ example: 0, description: 'Total refunded amount across one or more refund events' })
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
+  refundedAmount: number;
+
   @ApiPropertyOptional({ format: 'uuid', nullable: true })
   @Column({ type: 'uuid', nullable: true })
   paymentMethodId: string | null;

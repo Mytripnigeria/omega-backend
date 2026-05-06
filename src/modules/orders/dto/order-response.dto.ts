@@ -146,6 +146,10 @@ export class OrderResponseDto {
   @Expose()
   paidAmount: number;
 
+  @ApiProperty({ example: 0 })
+  @Expose()
+  refundedAmount: number;
+
   @ApiPropertyOptional({ format: 'uuid', nullable: true })
   @Expose()
   paymentMethodId: string | null;
@@ -229,6 +233,7 @@ export class OrderResponseDto {
         discountAmount: Number(entity.discountAmount),
         total: Number(entity.total),
         paidAmount: Number(entity.paidAmount),
+        refundedAmount: Number(entity.refundedAmount ?? 0),
         deliveryFee: Number(entity.deliveryFee ?? 0),
         tipAmount: Number(entity.tipAmount ?? 0),
         couponDiscount: Number(entity.couponDiscount ?? 0),

@@ -7,6 +7,8 @@ import { DeliveryEntity } from '../deliveries/entities/delivery.entity';
 import { ShiftEntity } from '../shifts/entities/shift.entity';
 import { IngredientEntity } from '../ingredients/entities/ingredient.entity';
 import { ExpenseEntity } from '../expenses/entities/expense.entity';
+import { CustomerEntity } from '../customers/entities/customer.entity';
+import { CashSessionEntity } from '../cash-sessions/entities/cash-session.entity';
 import { ReportsService } from './reports.service';
 import { ReportsController } from './reports.controller';
 
@@ -20,6 +22,8 @@ import { ReportsController } from './reports.controller';
       ShiftEntity,
       IngredientEntity,
       ExpenseEntity,
+      CustomerEntity,
+      CashSessionEntity,
     ]),
   ],
   controllers: [ReportsController],

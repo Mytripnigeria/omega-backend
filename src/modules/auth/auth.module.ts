@@ -11,6 +11,7 @@ import { AdminModule } from '../admin/admin.module';
 import { StaffModule } from '../staff/staff.module';
 import { ActivityLogModule } from '../activity-log/activity-log.module';
 import { CustomersModule } from '../customers/customers.module';
+import { ReferralsModule } from '../referrals/referrals.module';
 import { UsersModule } from '../users/users.module';
 
 @Module({
@@ -22,6 +23,7 @@ import { UsersModule } from '../users/users.module';
     ActivityLogModule,
     CustomersModule,
     UsersModule,
+    ReferralsModule,
   ],
   controllers: [AuthController],
   providers: [

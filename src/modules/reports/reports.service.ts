@@ -14,10 +14,13 @@ import {
   ExpenseEntity,
   ExpenseStatus,
 } from '../expenses/entities/expense.entity';
+import { CustomerEntity } from '../customers/entities/customer.entity';
+import { CashSessionEntity } from '../cash-sessions/entities/cash-session.entity';
 import {
   ReportsRangeDto,
   SalesReportFilterDto,
   DashboardSummaryFilterDto,
+  TopProductsFilterDto,
 } from './dto/reports-filter.dto';
 import {
   DashboardSummaryDto,
@@ -27,6 +30,8 @@ import {
   StaffPerformanceDto,
   StaffPerformanceRowDto,
   SalesReportBucketDto,
+  TopProductRowDto,
+  TopProductsReportDto,
 } from './dto/reports-response.dto';
 
 interface ActorContext {
@@ -53,6 +58,10 @@ export class ReportsService {
     private readonly ingredientRepo: Repository<IngredientEntity>,
     @InjectRepository(ExpenseEntity)
     private readonly expenseRepo: Repository<ExpenseEntity>,
+    @InjectRepository(CustomerEntity)
+    private readonly customerRepo: Repository<CustomerEntity>,
+    @InjectRepository(CashSessionEntity)
+    private readonly cashSessionRepo: Repository<CashSessionEntity>,
   ) {}
 
   // ----- helpers -----
@@ -105,6 +114,27 @@ export class ReportsService {
       .orderBy('bucket', 'ASC')
       .getRawMany<{ bucket: Date; orders: string; revenue: string }>();
 
+    // Channel breakdown per bucket.
+    const channelRows = await qb
+      .clone()
+      .select(`DATE_TRUNC('${truncUnit}', o.createdAt)`, 'bucket')
+      .addSelect('o.channel', 'channel')
+      .addSelect('COALESCE(SUM(o.total), 0)', 'revenue')
+      .groupBy('bucket')
+      .addGroupBy('o.channel')
+      .getRawMany<{ bucket: Date; channel: string; revenue: string }>();
+
+    const channelByBucket = new Map<number, Record<string, number>>();
+    const totalByChannel: Record<string, number> = {};
+    for (const r of channelRows) {
+      const key = new Date(r.bucket).getTime();
+      const slot = channelByBucket.get(key) ?? {};
+      slot[r.channel] = Number(r.revenue);
+      channelByBucket.set(key, slot);
+      totalByChannel[r.channel] =
+        (totalByChannel[r.channel] ?? 0) + Number(r.revenue);
+    }
+
     // Item counts per bucket via join.
     const itemRows = await this.itemRepo
       .createQueryBuilder('i')
@@ -131,6 +161,7 @@ export class ReportsService {
         orders: Number(r.orders),
         items: itemMap.get(bucketDate.getTime()) ?? 0,
         revenue: Number(r.revenue),
+        byChannel: channelByBucket.get(bucketDate.getTime()) ?? {},
       };
     });
 
@@ -145,6 +176,73 @@ export class ReportsService {
       totalRevenue,
       averageOrderValue,
       buckets,
+      byChannel: totalByChannel,
+    };
+  }
+
+  // ----- top products -----
+
+  async getTopProducts(
+    actor: ActorContext,
+    filter: TopProductsFilterDto,
+  ): Promise<TopProductsReportDto> {
+    const { from, to } = this.dateBound(filter);
+    const storeId = this.effectiveStoreId(actor, filter.storeId);
+    const limit = filter.limit ?? 5;
+
+    const qb = this.itemRepo
+      .createQueryBuilder('i')
+      .innerJoin('i.order', 'o')
+      .where('o.businessId = :bid', { bid: actor.businessId })
+      .andWhere('o.status NOT IN (:...excluded)', {
+        excluded: [OrderStatus.CANCELLED],
+      })
+      .andWhere('o.createdAt >= :from', { from })
+      .andWhere('o.createdAt <= :to', { to })
+      .andWhere('i.productId IS NOT NULL')
+      .select('i.productId', 'productId')
+      .addSelect('MAX(i.name)', 'name')
+      .addSelect('COALESCE(SUM(i.quantity), 0)', 'unitsSold')
+      .addSelect('COUNT(DISTINCT o.id)', 'ordersCount')
+      .addSelect('COALESCE(SUM(i.subtotal), 0)', 'revenue')
+      .groupBy('i.productId')
+      .orderBy('revenue', 'DESC')
+      .limit(limit);
+    if (storeId) qb.andWhere('o.storeId = :sid', { sid: storeId });
+
+    const rows = await qb.getRawMany<{
+      productId: string;
+      name: string;
+      unitsSold: string;
+      ordersCount: string;
+      revenue: string;
+    }>();
+
+    // Resolve categoryId in one round-trip by looking up the products.
+    const productIds = rows.map((r) => r.productId).filter(Boolean);
+    const categoryByProduct = new Map<string, string | null>();
+    if (productIds.length > 0) {
+      const productRows = await this.itemRepo.manager
+        .createQueryBuilder()
+        .from('products', 'p')
+        .select('p.id', 'id')
+        .addSelect('p."categoryId"', 'categoryId')
+        .where('p.id IN (:...ids)', { ids: productIds })
+        .getRawMany<{ id: string; categoryId: string | null }>();
+      for (const p of productRows) categoryByProduct.set(p.id, p.categoryId);
+    }
+
+    return {
+      rows: rows.map(
+        (r): TopProductRowDto => ({
+          productId: r.productId,
+          name: r.name,
+          categoryId: categoryByProduct.get(r.productId) ?? null,
+          unitsSold: Number(r.unitsSold),
+          ordersCount: Number(r.ordersCount),
+          revenue: Number(r.revenue),
+        }),
+      ),
     };
   }
 
@@ -460,14 +558,60 @@ export class ReportsService {
       .andWhere('d.status = :ds', { ds: DeliveryStatus.IN_TRANSIT })
       .getCount();
 
+    // Yesterday revenue for the same hour-window today (now-24h..now-24h),
+    // used by the dashboard to render an at-a-glance delta indicator.
+    const yesterdayStart = new Date(startOfToday);
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+    const yesterdayQb = this.orderRepo
+      .createQueryBuilder('o')
+      .where('o.businessId = :bid', { bid: actor.businessId })
+      .andWhere('o.createdAt >= :ys', { ys: yesterdayStart })
+      .andWhere('o.createdAt < :today', { today: startOfToday })
+      .andWhere('o.status NOT IN (:...excluded)', {
+        excluded: [OrderStatus.CANCELLED],
+      });
+    if (storeId) yesterdayQb.andWhere('o.storeId = :sid', { sid: storeId });
+    const yesterdayRevenueRow = await yesterdayQb
+      .select('COALESCE(SUM(o.total), 0)', 'sum')
+      .getRawOne<{ sum: string }>();
+    const yesterdayRevenue = Number(yesterdayRevenueRow?.sum ?? 0);
+
+    // Customer counts (business-wide; not store-scoped).
+    const totalCustomers = await this.customerRepo
+      .createQueryBuilder('c')
+      .where('c.businessId = :bid', { bid: actor.businessId })
+      .getCount();
+    const newCustomersToday = await this.customerRepo
+      .createQueryBuilder('c')
+      .where('c.businessId = :bid', { bid: actor.businessId })
+      .andWhere('c.createdAt >= :today', { today: startOfToday })
+      .getCount();
+    const loyaltyMembers = await this.customerRepo
+      .createQueryBuilder('c')
+      .where('c.businessId = :bid', { bid: actor.businessId })
+      .andWhere('c.points > 0')
+      .getCount();
+
+    const openCashSessions = await this.cashSessionRepo
+      .createQueryBuilder('cs')
+      .where('cs.businessId = :bid', { bid: actor.businessId })
+      .andWhere('cs.status = :st', { st: 'open' })
+      .andWhere(storeId ? 'cs.storeId = :sid' : '1=1', { sid: storeId })
+      .getCount();
+
     return {
       todayOrders,
       todayRevenue,
+      yesterdayRevenue,
       openOrders,
       activeShifts,
       lowStockCount,
       pendingExpenses,
       deliveriesInTransit,
+      newCustomersToday,
+      totalCustomers,
+      loyaltyMembers,
+      openCashSessions,
     };
   }
 }

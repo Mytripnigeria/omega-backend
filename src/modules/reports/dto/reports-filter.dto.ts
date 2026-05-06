@@ -1,5 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsUUID,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class ReportsRangeDto {
   @ApiPropertyOptional({ format: 'uuid' })
@@ -30,4 +39,14 @@ export class DashboardSummaryFilterDto {
   @IsOptional()
   @IsUUID()
   storeId?: string;
+}
+
+export class TopProductsFilterDto extends ReportsRangeDto {
+  @ApiPropertyOptional({ example: 5, default: 5, minimum: 1, maximum: 50 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  limit?: number;
 }

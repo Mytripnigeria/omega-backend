@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Expose, Type, plainToInstance } from 'class-transformer';
 import {
+  ArrayUnique,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsEnum,
@@ -8,12 +10,17 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   Min,
   MinLength,
 } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
-import { CouponEntity, CouponType } from '../entities/coupon.entity';
+import {
+  CouponApplicableTo,
+  CouponEntity,
+  CouponType,
+} from '../entities/coupon.entity';
 
 export class CreateCouponDto {
   @ApiProperty({ example: 'SAVE10' })
@@ -76,6 +83,34 @@ export class CreateCouponDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({
+    enum: ['all', 'specific_products', 'specific_categories'],
+    default: 'all',
+  })
+  @IsOptional()
+  @IsEnum(['all', 'specific_products', 'specific_categories'])
+  applicableTo?: CouponApplicableTo;
+
+  @ApiPropertyOptional({
+    type: 'array',
+    items: { type: 'string', format: 'uuid' },
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  productIds?: string[];
+
+  @ApiPropertyOptional({
+    type: 'array',
+    items: { type: 'string', format: 'uuid' },
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  categoryIds?: string[];
 }
 
 export class UpdateCouponDto extends PartialType(CreateCouponDto) {}
@@ -102,6 +137,21 @@ export class ValidateCouponDto {
   @IsNumber()
   @Min(0)
   subtotal: number;
+
+  @ApiPropertyOptional({
+    type: 'array',
+    items: { type: 'object', additionalProperties: true },
+    description:
+      'Cart items used to validate product/category targeting. ' +
+      'Each item: { productId?: uuid, categoryId?: uuid, lineTotal: number }',
+  })
+  @IsOptional()
+  @IsArray()
+  items?: Array<{
+    productId?: string;
+    categoryId?: string;
+    lineTotal: number;
+  }>;
 }
 
 export class CouponResponseDto {
@@ -163,6 +213,18 @@ export class CouponResponseDto {
   @Expose()
   isActive: boolean;
 
+  @ApiProperty({ enum: ['all', 'specific_products', 'specific_categories'] })
+  @Expose()
+  applicableTo: CouponApplicableTo;
+
+  @ApiProperty({ type: 'array', items: { type: 'string', format: 'uuid' } })
+  @Expose()
+  productIds: string[];
+
+  @ApiProperty({ type: 'array', items: { type: 'string', format: 'uuid' } })
+  @Expose()
+  categoryIds: string[];
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)
@@ -183,6 +245,12 @@ export class CouponResponseDto {
           entity.minOrderAmount == null ? null : Number(entity.minOrderAmount),
         maxDiscount:
           entity.maxDiscount == null ? null : Number(entity.maxDiscount),
+        productIds: Array.isArray(entity.productIds)
+          ? entity.productIds.filter(Boolean)
+          : [],
+        categoryIds: Array.isArray(entity.categoryIds)
+          ? entity.categoryIds.filter(Boolean)
+          : [],
       },
       { excludeExtraneousValues: true },
     );

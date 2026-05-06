@@ -12,6 +12,14 @@ export class SalesReportBucketDto {
 
   @ApiProperty({ example: 156000 })
   revenue: number;
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: { type: 'number' },
+    example: { pos: 84000, website: 60000, phone: 12000 },
+    description: 'Revenue split by order channel for this bucket',
+  })
+  byChannel: Record<string, number>;
 }
 
 export class SalesReportDto {
@@ -29,6 +37,14 @@ export class SalesReportDto {
 
   @ApiProperty({ type: [SalesReportBucketDto] })
   buckets: SalesReportBucketDto[];
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: { type: 'number' },
+    example: { pos: 1200000, website: 540000, phone: 120500 },
+    description: 'Total revenue split by channel across the entire range',
+  })
+  byChannel: Record<string, number>;
 }
 
 export class StaffPerformanceRowDto {
@@ -113,6 +129,12 @@ export class DashboardSummaryDto {
   @ApiProperty({ example: 184500 })
   todayRevenue: number;
 
+  @ApiProperty({
+    example: 152000,
+    description: 'Revenue from the same hour-window yesterday — used for delta indicator',
+  })
+  yesterdayRevenue: number;
+
   @ApiProperty({ example: 5 })
   openOrders: number;
 
@@ -127,4 +149,47 @@ export class DashboardSummaryDto {
 
   @ApiProperty({ example: 4, description: 'Deliveries currently in_transit' })
   deliveriesInTransit: number;
+
+  @ApiProperty({ example: 12, description: 'New customers (created today)' })
+  newCustomersToday: number;
+
+  @ApiProperty({ example: 1240, description: 'Total customer count' })
+  totalCustomers: number;
+
+  @ApiProperty({
+    example: 142,
+    description: 'Loyalty program members (customers with points > 0)',
+  })
+  loyaltyMembers: number;
+
+  @ApiProperty({
+    example: 7,
+    description: 'Cash sessions still open right now',
+  })
+  openCashSessions: number;
+}
+
+export class TopProductRowDto {
+  @ApiProperty({ format: 'uuid' })
+  productId: string;
+
+  @ApiProperty({ example: 'Jollof Rice (Large)' })
+  name: string;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  categoryId: string | null;
+
+  @ApiProperty({ example: 84 })
+  unitsSold: number;
+
+  @ApiProperty({ example: 18 })
+  ordersCount: number;
+
+  @ApiProperty({ example: 378000 })
+  revenue: number;
+}
+
+export class TopProductsReportDto {
+  @ApiProperty({ type: [TopProductRowDto] })
+  rows: TopProductRowDto[];
 }

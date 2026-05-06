@@ -16,6 +16,7 @@ import { CreateBreakDto } from './dto/break-dto';
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { JwtPayload } from '../../common/types/jwt-payload.types';
+import { CashSessionsService } from '../cash-sessions/cash-sessions.service';
 
 @Injectable()
 export class ShiftsService {
@@ -23,6 +24,7 @@ export class ShiftsService {
     @InjectRepository(ShiftEntity)
     private readonly shiftRepo: Repository<ShiftEntity>,
     private readonly activityLog: ActivityLogService,
+    private readonly cashSessions: CashSessionsService,
   ) {}
 
   async create(dto: CreateShiftDto): Promise<ShiftResponseDto> {
@@ -140,6 +142,16 @@ export class ShiftsService {
     }
     if (shift.status !== ShiftStatus.IN_PROGRESS) {
       throw new BadRequestException(`Cannot clock out: shift is not in progress`);
+    }
+
+    const openSession = await this.cashSessions.findActiveForStaff(
+      staff.sub,
+      shift.storeId,
+    );
+    if (openSession) {
+      throw new BadRequestException(
+        'Close your active cash session before clocking out',
+      );
     }
 
     shift.actualClockOut = new Date();

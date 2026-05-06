@@ -77,3 +77,17 @@ export class UpdatePrepStatusDto {
   @IsEnum(['pending', 'preparing', 'ready'])
   prepStatus: 'pending' | 'preparing' | 'ready';
 }
+
+export class RefundOrderDto {
+  @ApiPropertyOptional({
+    example: 2500,
+    description:
+      'Amount to refund. Must be > 0 and <= (paidAmount - refundedAmount).',
+  })
+  amount: number;
+
+  @ApiPropertyOptional({ example: 'Wrong item delivered' })
+  @IsOptional()
+  @IsString()
+  reason?: string;
+}

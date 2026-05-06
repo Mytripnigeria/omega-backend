@@ -15,6 +15,11 @@ export enum CouponType {
   FIXED = 'fixed',
 }
 
+export type CouponApplicableTo =
+  | 'all'
+  | 'specific_products'
+  | 'specific_categories';
+
 @Entity('coupons')
 @Unique(['businessId', 'code'])
 export class CouponEntity {
@@ -89,6 +94,33 @@ export class CouponEntity {
   @ApiProperty({ default: true })
   @Column({ default: true })
   isActive: boolean;
+
+  @ApiProperty({
+    enum: ['all', 'specific_products', 'specific_categories'],
+    default: 'all',
+  })
+  @Column({
+    type: 'enum',
+    enum: ['all', 'specific_products', 'specific_categories'],
+    default: 'all',
+  })
+  applicableTo: CouponApplicableTo;
+
+  @ApiProperty({
+    type: 'array',
+    items: { type: 'string', format: 'uuid' },
+    description: 'Product IDs the coupon applies to (when applicableTo=specific_products)',
+  })
+  @Column({ type: 'simple-array', default: '' })
+  productIds: string[];
+
+  @ApiProperty({
+    type: 'array',
+    items: { type: 'string', format: 'uuid' },
+    description: 'Category IDs the coupon applies to (when applicableTo=specific_categories)',
+  })
+  @Column({ type: 'simple-array', default: '' })
+  categoryIds: string[];
 
   @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn()

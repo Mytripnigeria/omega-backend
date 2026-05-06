@@ -24,6 +24,8 @@ import {
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { CustomersService } from '../customers/customers.service';
+import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
+import { TransactionMethod } from '../financial-transactions/entities/financial-transaction.entity';
 
 const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PENDING]: [OrderStatus.PREPARING, OrderStatus.CANCELLED],
@@ -54,7 +56,18 @@ export class OrdersService {
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
     private readonly customersService: CustomersService,
+    private readonly ledger: FinancialTransactionsService,
   ) {}
+
+  private mapPaymentChannelToMethod(
+    ch: OrderEntity['paymentChannel'] | null | undefined,
+  ): TransactionMethod {
+    if (ch === 'paystack' || ch === 'card') return ch === 'card' ? 'card' : 'paystack';
+    if (ch === 'cash') return 'cash';
+    if (ch === 'wallet') return 'wallet';
+    if (ch === 'points') return 'points';
+    return 'other';
+  }
 
   /**
    * Allocates the next sequential order number for a store, atomically.
@@ -369,16 +382,38 @@ export class OrdersService {
     const amount = Number(dto.amount ?? Number(order.total) - Number(order.paidAmount));
     if (amount <= 0) throw new BadRequestException('Payment amount must be positive');
 
-    order.paidAmount = Number(order.paidAmount) + amount;
-    if (dto.paymentMethodId) order.paymentMethodId = dto.paymentMethodId;
-    if (Number(order.paidAmount) >= Number(order.total)) {
-      order.paidAt = new Date();
-      // Auto-transition to completed if it was already served, otherwise leave status alone.
-      if (order.status === OrderStatus.SERVED) {
-        order.status = OrderStatus.COMPLETED;
+    await this.dataSource.transaction(async (m) => {
+      order.paidAmount = Number(order.paidAmount) + amount;
+      if (dto.paymentMethodId) order.paymentMethodId = dto.paymentMethodId;
+      if (Number(order.paidAmount) >= Number(order.total)) {
+        order.paidAt = new Date();
+        order.paymentStatus = 'paid';
+        if (order.status === OrderStatus.SERVED) {
+          order.status = OrderStatus.COMPLETED;
+        }
       }
-    }
-    await this.orderRepo.save(order);
+      await m.save(order);
+
+      await this.ledger.record(
+        {
+          businessId: actor.businessId,
+          storeId: order.storeId,
+          type: 'credit',
+          purpose: 'order_payment',
+          amount,
+          method: this.mapPaymentChannelToMethod(order.paymentChannel),
+          reference: order.paymentReference ?? null,
+          description: `Order #${order.orderNumber} payment`,
+          linkedType: 'order',
+          linkedId: order.id,
+          customerId: order.customerId,
+          customerName: order.customerName,
+          staffId: actor.sub_type === 'staff' ? actor.sub : order.staffId,
+          staffName: actor.actorName ?? order.staffName ?? null,
+        },
+        m,
+      );
+    });
 
     this.activityLog.record({
       actorType: actor.sub_type,
@@ -398,6 +433,91 @@ export class OrdersService {
     });
 
     return this.findOne(actor, order.id);
+  }
+
+  async refund(
+    actor: ActorContext,
+    id: string,
+    dto: { amount: number; reason?: string },
+  ): Promise<OrderResponseDto> {
+    const order = await this.findEntity(actor, id);
+    const amount = Number(dto.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Refund amount must be greater than zero');
+    }
+    const refundable = Number(order.paidAmount) - Number(order.refundedAmount ?? 0);
+    if (amount > refundable) {
+      throw new BadRequestException(
+        `Refund amount exceeds refundable balance (${refundable})`,
+      );
+    }
+
+    await this.dataSource.transaction(async (m) => {
+      order.refundedAmount = Number(order.refundedAmount ?? 0) + amount;
+      const netPaid = Number(order.paidAmount) - Number(order.refundedAmount);
+      const fullyRefunded = netPaid <= 0;
+      if (fullyRefunded) {
+        order.paymentStatus = 'refunded';
+      }
+      await m.save(order);
+
+      await m.save(
+        m.create(OrderStatusEventEntity, {
+          orderId: order.id,
+          fromStatus: order.status,
+          toStatus: order.status,
+          actorId: actor.sub,
+          actorType: actor.sub_type,
+          reason: dto.reason ?? `Refund: ₦${amount}${fullyRefunded ? ' (full)' : ' (partial)'}`,
+        }),
+      );
+
+      await this.ledger.record(
+        {
+          businessId: actor.businessId,
+          storeId: order.storeId,
+          type: 'debit',
+          purpose: 'order_refund',
+          amount,
+          method: this.mapPaymentChannelToMethod(order.paymentChannel),
+          reference: order.paymentReference ?? null,
+          description: `Order #${order.orderNumber} refund${dto.reason ? ` — ${dto.reason}` : ''}`,
+          linkedType: 'order',
+          linkedId: order.id,
+          customerId: order.customerId,
+          customerName: order.customerName,
+          staffId: actor.sub_type === 'staff' ? actor.sub : null,
+          staffName: actor.actorName ?? null,
+        },
+        m,
+      );
+    });
+
+    this.activityLog.record({
+      actorType: actor.sub_type,
+      actorId: actor.sub,
+      actorName: actor.actorName ?? 'Unknown',
+      action: 'order.refunded',
+      businessId: actor.businessId,
+      storeId: order.storeId,
+      resourceType: 'order',
+      resourceId: order.id,
+      metadata: {
+        orderNumber: order.orderNumber,
+        amount,
+        reason: dto.reason ?? null,
+      },
+    });
+
+    return this.findOne(actor, order.id);
+  }
+
+  async getEvents(actor: ActorContext, id: string) {
+    await this.findEntity(actor, id);
+    return this.eventRepo.find({
+      where: { orderId: id },
+      order: { createdAt: 'ASC' },
+    });
   }
 
   async updateItemPrepStatus(

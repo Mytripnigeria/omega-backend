@@ -40,6 +40,15 @@ export class StorefrontRegisterDto {
   @IsString()
   @Matches(/^\+?[0-9]{7,15}$/, { message: 'Invalid phone number' })
   phone?: string;
+
+  @ApiPropertyOptional({
+    example: 'REF-A8K3',
+    description:
+      'Referral code from another customer. Awards both parties their configured bonus.',
+  })
+  @IsOptional()
+  @IsString()
+  referredByCode?: string;
 }
 
 export class StorefrontLoginDto {

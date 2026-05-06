@@ -23,6 +23,13 @@ import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto'
 interface ApplyCouponResult {
   coupon: CouponEntity;
   discountAmount: number;
+  applicableSubtotal: number;
+}
+
+export interface CartLineForCoupon {
+  productId?: string | null;
+  categoryId?: string | null;
+  lineTotal: number;
 }
 
 @Injectable()
@@ -130,6 +137,7 @@ export class CouponsService {
     customerId: string | null,
     code: string,
     subtotal: number,
+    items: CartLineForCoupon[] = [],
   ): Promise<ValidateCouponResponseDto> {
     const upperCode = code.trim().toUpperCase();
     const coupon = await this.couponRepo.findOne({
@@ -169,7 +177,20 @@ export class CouponsService {
       }
     }
 
-    const discountAmount = this.computeDiscount(coupon, subtotal);
+    const applicableSubtotal = this.applicableSubtotalFor(coupon, items, subtotal);
+    if (applicableSubtotal <= 0) {
+      return {
+        valid: false,
+        reason:
+          coupon.applicableTo === 'specific_products'
+            ? 'No items in your cart qualify for this coupon'
+            : coupon.applicableTo === 'specific_categories'
+              ? 'No items in your cart match the eligible categories'
+              : 'Coupon cannot be applied',
+      };
+    }
+
+    const discountAmount = this.computeDiscount(coupon, applicableSubtotal);
 
     return {
       valid: true,
@@ -188,6 +209,7 @@ export class CouponsService {
     code: string,
     subtotal: number,
     orderId: string | null,
+    items: CartLineForCoupon[] = [],
   ): Promise<ApplyCouponResult> {
     return this.dataSource.transaction(async (mgr) => {
       const upperCode = code.trim().toUpperCase();
@@ -227,7 +249,21 @@ export class CouponsService {
         }
       }
 
-      const discountAmount = this.computeDiscount(coupon, subtotal);
+      const applicableSubtotal = this.applicableSubtotalFor(
+        coupon,
+        items,
+        subtotal,
+      );
+      if (applicableSubtotal <= 0) {
+        throw new BadRequestException(
+          coupon.applicableTo === 'specific_products'
+            ? 'No items in your cart qualify for this coupon'
+            : coupon.applicableTo === 'specific_categories'
+              ? 'No items in your cart match the eligible categories'
+              : 'Coupon cannot be applied',
+        );
+      }
+      const discountAmount = this.computeDiscount(coupon, applicableSubtotal);
 
       coupon.usageCount += 1;
       await mgr.getRepository(CouponEntity).save(coupon);
@@ -241,8 +277,39 @@ export class CouponsService {
         }),
       );
 
-      return { coupon, discountAmount };
+      return { coupon, discountAmount, applicableSubtotal };
     });
+  }
+
+  /**
+   * Compute the portion of the subtotal that the coupon actually applies to,
+   * based on `applicableTo` + `productIds` / `categoryIds`. When the coupon
+   * applies to "all", returns the full subtotal. When items aren't supplied
+   * (legacy callers / public validate without item context), defaults to
+   * full subtotal for `all` and zero otherwise — forcing callers to pass
+   * items if they want targeted coupons to validate.
+   */
+  private applicableSubtotalFor(
+    coupon: CouponEntity,
+    items: CartLineForCoupon[],
+    fallbackSubtotal: number,
+  ): number {
+    if (coupon.applicableTo === 'all' || coupon.applicableTo == null) {
+      return Number(fallbackSubtotal);
+    }
+    if (!items || items.length === 0) {
+      // Caller didn't pass items; we cannot verify targeting. Refuse.
+      return 0;
+    }
+    const matchProduct = (it: CartLineForCoupon) =>
+      !!it.productId && coupon.productIds?.includes(it.productId);
+    const matchCategory = (it: CartLineForCoupon) =>
+      !!it.categoryId && coupon.categoryIds?.includes(it.categoryId);
+    const matcher =
+      coupon.applicableTo === 'specific_products' ? matchProduct : matchCategory;
+    return items
+      .filter(matcher)
+      .reduce((sum, it) => sum + Number(it.lineTotal ?? 0), 0);
   }
 
   private computeDiscount(coupon: CouponEntity, subtotal: number): number {

@@ -10,6 +10,7 @@ import { AdminService } from '../admin/admin.service';
 import { StaffService } from '../staff/staff.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { CustomersService } from '../customers/customers.service';
+import { ReferralsService } from '../referrals/referrals.service';
 import { UsersService } from '../users/users.service';
 import { CustomerSource } from '../customers/entities/customer.entity';
 import { AdminLoginDto } from './dto/admin-login.dto';
@@ -37,6 +38,7 @@ export class AuthService {
     private readonly activityLog: ActivityLogService,
     private readonly customersService: CustomersService,
     private readonly usersService: UsersService,
+    private readonly referralsService: ReferralsService,
   ) {}
 
   async adminLogin(dto: AdminLoginDto) {
@@ -91,6 +93,19 @@ export class AuthService {
         avatarUrl: admin.avatarUrl,
         twoFactorEnabled: admin.twoFactorEnabled,
       },
+    };
+  }
+
+  async adminMe(adminId: string) {
+    const admin = await this.adminService.findById(adminId);
+    return {
+      id: admin.id,
+      businessId: admin.businessId,
+      fullName: admin.fullName,
+      email: admin.email,
+      role: admin.role,
+      avatarUrl: admin.avatarUrl,
+      twoFactorEnabled: admin.twoFactorEnabled,
     };
   }
 
@@ -257,6 +272,19 @@ export class AuthService {
       email: dto.email,
       password: hashed,
     });
+
+    // Optional: link this signup to the referrer's account.
+    if (dto.referredByCode) {
+      try {
+        await this.referralsService.recordSignUp(
+          dto.businessId,
+          customer.id,
+          dto.referredByCode,
+        );
+      } catch {
+        // Don't block registration on referral lookup failures.
+      }
+    }
 
     return this.issueUserTokens(user.id, user.email, user.businessId, user.customerId);
   }

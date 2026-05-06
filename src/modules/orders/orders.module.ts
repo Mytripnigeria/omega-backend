@@ -6,6 +6,7 @@ import { OrderStatusEventEntity } from './entities/order-status-event.entity';
 import { StoreEntity } from '../store/entities/store.entity';
 import { CustomerAddressEntity } from '../customer-addresses/entities/customer-address.entity';
 import { CustomerPaymentMethodEntity } from '../customer-payment-methods/entities/customer-payment-method.entity';
+import { ProductEntity } from '../products/entities/product.entity';
 import { OrdersService } from './orders.service';
 import { StorefrontOrdersService } from './storefront-orders.service';
 import { OrdersController } from './orders.controller';
@@ -16,6 +17,8 @@ import {
 import { ActivityLogModule } from '../activity-log/activity-log.module';
 import { CustomersModule } from '../customers/customers.module';
 import { CouponsModule } from '../coupons/coupons.module';
+import { LoyaltyModule } from '../loyalty/loyalty.module';
+import { ReferralsModule } from '../referrals/referrals.module';
 
 @Module({
   imports: [
@@ -26,10 +29,13 @@ import { CouponsModule } from '../coupons/coupons.module';
       StoreEntity,
       CustomerAddressEntity,
       CustomerPaymentMethodEntity,
+      ProductEntity,
     ]),
     ActivityLogModule,
     CustomersModule,
     CouponsModule,
+    LoyaltyModule,
+    ReferralsModule,
   ],
   controllers: [
     OrdersController,
