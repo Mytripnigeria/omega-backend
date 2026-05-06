@@ -35,6 +35,7 @@ import { InventoryLocationsModule } from './modules/inventory-locations/inventor
 import { StockTransfersModule } from './modules/stock-transfers/stock-transfers.module';
 import { EquipmentModule } from './modules/equipment/equipment.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
+import { BookingsModule } from './modules/bookings/bookings.module';
 
 @Module({
   imports: [
@@ -77,6 +78,7 @@ import { SuppliersModule } from './modules/suppliers/suppliers.module';
     StockTransfersModule,
     EquipmentModule,
     SuppliersModule,
+    BookingsModule,
   ],
 })
 export class AppModule {}
