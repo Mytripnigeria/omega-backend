@@ -115,6 +115,31 @@ export class ShiftEntity {
     }>;
   }> | null;
 
+  @ApiPropertyOptional({
+    type: 'array',
+    nullable: true,
+    description: 'Recorded breaks taken during the shift',
+    items: {
+      type: 'object',
+      additionalProperties: true,
+      example: {
+        id: 'b1',
+        type: 'lunch',
+        startTime: '2026-05-10T12:00:00Z',
+        durationMinutes: 30,
+        notes: null,
+      },
+    },
+  })
+  @Column({ type: 'jsonb', nullable: true })
+  breaks: Array<{
+    id: string;
+    type: 'lunch' | 'rest' | 'other';
+    startTime: string;
+    durationMinutes: number;
+    notes?: string | null;
+  }> | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn()
   createdAt: Date;

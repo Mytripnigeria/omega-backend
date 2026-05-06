@@ -7,7 +7,7 @@ import {
 } from 'typeorm';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-export type ActorType = 'admin' | 'staff' | 'system';
+export type ActorType = 'admin' | 'staff' | 'user' | 'system';
 
 @Entity('activity_log')
 @Index(['businessId', 'createdAt'])
@@ -17,8 +17,8 @@ export class ActivityLogEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ApiProperty({ enum: ['admin', 'staff', 'system'], example: 'staff' })
-  @Column({ type: 'enum', enum: ['admin', 'staff', 'system'] })
+  @ApiProperty({ enum: ['admin', 'staff', 'user', 'system'], example: 'staff' })
+  @Column({ type: 'enum', enum: ['admin', 'staff', 'user', 'system'] })
   actorType: ActorType;
 
   @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'Null when actorType is "system"' })

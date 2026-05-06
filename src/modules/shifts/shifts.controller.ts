@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -20,15 +21,22 @@ import {
   ApiNoContentResponse,
   ApiParam,
 } from '@nestjs/swagger';
+import { Request } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { StaffJwtGuard } from '../../common/guards/staff-jwt.guard';
+import { JwtOrStaffGuard } from '../../common/guards/jwt-or-staff.guard';
 import { CurrentStaff } from '../../common/decorators/current-staff.decorator';
-import { StaffJwtPayload } from '../../common/types/jwt-payload.types';
+import {
+  AdminJwtPayload,
+  JwtPayload,
+  StaffJwtPayload,
+} from '../../common/types/jwt-payload.types';
 import { ShiftsService } from './shifts.service';
 import { CreateShiftDto } from './dto/create-shift.dto';
 import { UpdateShiftDto } from './dto/update-shift.dto';
 import { ShiftFilterDto } from './dto/shift-filter.dto';
 import { ShiftResponseDto } from './dto/shift-response.dto';
+import { CreateBreakDto } from './dto/break-dto';
 
 @ApiTags('shifts')
 @Controller('shifts')
@@ -142,5 +150,60 @@ export class ShiftsController {
       staff,
       checklist as Parameters<typeof this.shiftsService.updateChecklist>[2],
     );
+  }
+
+  @ApiOperation({
+    summary: 'Admin-end a shift',
+    description:
+      'Admin-only. Force-closes a scheduled or in-progress shift — sets `actualClockOut` to now ' +
+      'and transitions the shift to `completed`. Used when staff forgot to clock out.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiOkResponse({ type: ShiftResponseDto })
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/admin-end')
+  adminEnd(@Param('id') id: string, @Req() req: Request) {
+    const admin = req.user as AdminJwtPayload;
+    return this.shiftsService.adminEnd(id, admin);
+  }
+
+  @ApiOperation({
+    summary: 'Log a break on a shift',
+    description:
+      'Records a break (lunch, rest, or other) on the shift. Admins may log breaks on any shift; ' +
+      'staff may only log breaks on their own shift.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiCreatedResponse({ type: ShiftResponseDto })
+  @ApiBearerAuth()
+  @UseGuards(JwtOrStaffGuard)
+  @Post(':id/breaks')
+  addBreak(
+    @Param('id') id: string,
+    @Req() req: Request,
+    @Body() dto: CreateBreakDto,
+  ) {
+    return this.shiftsService.addBreak(id, req.user as JwtPayload, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Remove a logged break',
+    description:
+      'Removes a break by id from the shift. Admins may remove from any shift; staff may only ' +
+      'remove from their own shift.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'breakId', format: 'uuid' })
+  @ApiOkResponse({ type: ShiftResponseDto })
+  @ApiBearerAuth()
+  @UseGuards(JwtOrStaffGuard)
+  @Delete(':id/breaks/:breakId')
+  deleteBreak(
+    @Param('id') id: string,
+    @Param('breakId') breakId: string,
+    @Req() req: Request,
+  ) {
+    return this.shiftsService.deleteBreak(id, breakId, req.user as JwtPayload);
   }
 }

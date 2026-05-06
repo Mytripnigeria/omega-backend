@@ -9,14 +9,23 @@ import * as bcrypt from 'bcrypt';
 import { AdminService } from '../admin/admin.service';
 import { StaffService } from '../staff/staff.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { CustomersService } from '../customers/customers.service';
+import { UsersService } from '../users/users.service';
+import { CustomerSource } from '../customers/entities/customer.entity';
 import { AdminLoginDto } from './dto/admin-login.dto';
 import { StaffLookupDto } from './dto/staff-lookup.dto';
 import { StaffPinLoginDto } from './dto/staff-pin-login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import {
+  StorefrontLoginDto,
+  StorefrontRegisterDto,
+} from './dto/storefront-register.dto';
+import {
   AdminJwtPayload,
   StaffJwtPayload,
+  UserJwtPayload,
 } from '../../common/types/jwt-payload.types';
+import { ConflictException } from '@nestjs/common';
 
 @Injectable()
 export class AuthService {
@@ -26,6 +35,8 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly activityLog: ActivityLogService,
+    private readonly customersService: CustomersService,
+    private readonly usersService: UsersService,
   ) {}
 
   async adminLogin(dto: AdminLoginDto) {
@@ -205,6 +216,137 @@ export class AuthService {
         businessId,
         storeId: staff.storeId,
         permissions,
+      },
+    };
+  }
+
+  // ========== Storefront (User) flows ==========
+
+  async storefrontRegister(dto: StorefrontRegisterDto) {
+    const existingUser = await this.usersService.findByEmail(
+      dto.businessId,
+      dto.email,
+    );
+    if (existingUser) {
+      throw new ConflictException('An account with this email already exists');
+    }
+
+    // Find or create the customer record. If a customer with this email or phone
+    // already exists in the business (e.g. created by an admin), reuse it.
+    let customer = await this.customersService.findByEmailOrPhone(
+      dto.businessId,
+      dto.email,
+      dto.phone,
+    );
+    if (!customer) {
+      customer = await this.customersService.createInternal(dto.businessId, {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        email: dto.email,
+        phone: dto.phone,
+        source: CustomerSource.STOREFRONT,
+      });
+    }
+
+    const saltRounds = this.configService.get<number>('bcryptSaltRounds') ?? 10;
+    const hashed = await bcrypt.hash(dto.password, saltRounds);
+
+    const user = await this.usersService.create({
+      businessId: dto.businessId,
+      customerId: customer.id,
+      email: dto.email,
+      password: hashed,
+    });
+
+    return this.issueUserTokens(user.id, user.email, user.businessId, user.customerId);
+  }
+
+  async storefrontLogin(dto: StorefrontLoginDto) {
+    const user = await this.usersService.findByEmail(dto.businessId, dto.email);
+    if (!user) throw new UnauthorizedException('Invalid credentials');
+
+    const isValid = await bcrypt.compare(dto.password, user.password);
+    if (!isValid) throw new UnauthorizedException('Invalid credentials');
+
+    await this.usersService.recordLogin(user.id);
+
+    return this.issueUserTokens(user.id, user.email, user.businessId, user.customerId);
+  }
+
+  async storefrontRefresh(dto: RefreshTokenDto) {
+    let payload: UserJwtPayload;
+    try {
+      payload = this.jwtService.verify<UserJwtPayload>(dto.refreshToken, {
+        secret: this.configService.get<string>('jwt.refreshSecret') as string,
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    const user = await this.usersService.findById(payload.sub).catch(() => null);
+    if (!user?.refreshTokenHash) {
+      throw new UnauthorizedException('Session expired');
+    }
+
+    const ok = await bcrypt.compare(dto.refreshToken, user.refreshTokenHash);
+    if (!ok) throw new UnauthorizedException('Invalid refresh token');
+
+    const newPayload: UserJwtPayload = {
+      sub: user.id,
+      sub_type: 'user',
+      email: user.email,
+      businessId: user.businessId,
+      customerId: user.customerId,
+    };
+    const accessToken = this.jwtService.sign(newPayload, {
+      secret: this.configService.get<string>('jwt.secret') as string,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expiresIn: this.configService.get('jwt.expiresIn') as any,
+    });
+    return { accessToken };
+  }
+
+  async storefrontLogout(userId: string): Promise<void> {
+    await this.usersService.updateRefreshToken(userId, null);
+  }
+
+  private async issueUserTokens(
+    userId: string,
+    email: string,
+    businessId: string,
+    customerId: string,
+  ) {
+    const payload: UserJwtPayload = {
+      sub: userId,
+      sub_type: 'user',
+      email,
+      businessId,
+      customerId,
+    };
+
+    const accessToken = this.jwtService.sign(payload, {
+      secret: this.configService.get<string>('jwt.secret') as string,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expiresIn: this.configService.get('jwt.expiresIn') as any,
+    });
+    const refreshToken = this.jwtService.sign(payload, {
+      secret: this.configService.get<string>('jwt.refreshSecret') as string,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expiresIn: this.configService.get('jwt.refreshExpiresIn') as any,
+    });
+
+    const saltRounds = this.configService.get<number>('bcryptSaltRounds') ?? 10;
+    const hashed = await bcrypt.hash(refreshToken, saltRounds);
+    await this.usersService.updateRefreshToken(userId, hashed);
+
+    return {
+      accessToken,
+      refreshToken,
+      user: {
+        id: userId,
+        email,
+        businessId,
+        customerId,
       },
     };
   }

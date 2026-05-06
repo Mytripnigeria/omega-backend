@@ -53,6 +53,11 @@ export class OrderEntity {
   @Column({ type: 'varchar', nullable: true })
   staffName: string | null;
 
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'Linked CustomerEntity id' })
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  customerId: string | null;
+
   @ApiPropertyOptional({ example: 'John Doe', nullable: true })
   @Column({ type: 'varchar', nullable: true })
   customerName: string | null;

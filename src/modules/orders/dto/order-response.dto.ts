@@ -98,6 +98,10 @@ export class OrderResponseDto {
   @Expose()
   staffName: string | null;
 
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @Expose()
+  customerId: string | null;
+
   @ApiPropertyOptional({ nullable: true })
   @Expose()
   customerName: string | null;

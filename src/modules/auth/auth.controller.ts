@@ -15,6 +15,14 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { Disable2FADto, Verify2FADto } from './dto/two-factor.dto';
 import {
+  StorefrontLoginDto,
+  StorefrontRegisterDto,
+} from './dto/storefront-register.dto';
+import { UserJwtGuard } from '../../common/guards/user-jwt.guard';
+import { Request } from 'express';
+import { Req } from '@nestjs/common';
+import { UserJwtPayload } from '../../common/types/jwt-payload.types';
+import {
   AdminLoginResponseDto,
   AdminRefreshResponseDto,
   StaffLookupResponseDto,
@@ -146,5 +154,40 @@ export class AuthController {
   @Post('staff/login')
   staffPinLogin(@Body() dto: StaffPinLoginDto) {
     return this.authService.staffPinLogin(dto);
+  }
+
+  // ========== Storefront (User) ==========
+
+  @ApiOperation({
+    summary: 'Storefront register',
+    description:
+      'Creates a storefront user account. If a customer with the same email or phone already exists ' +
+      'in the business, the new user is linked to that existing customer; otherwise a new customer record is created.',
+  })
+  @Post('storefront/register')
+  storefrontRegister(@Body() dto: StorefrontRegisterDto) {
+    return this.authService.storefrontRegister(dto);
+  }
+
+  @ApiOperation({ summary: 'Storefront login' })
+  @Post('storefront/login')
+  storefrontLogin(@Body() dto: StorefrontLoginDto) {
+    return this.authService.storefrontLogin(dto);
+  }
+
+  @ApiOperation({ summary: 'Storefront refresh token' })
+  @Post('storefront/refresh')
+  storefrontRefresh(@Body() dto: RefreshTokenDto) {
+    return this.authService.storefrontRefresh(dto);
+  }
+
+  @ApiOperation({ summary: 'Storefront logout' })
+  @ApiBearerAuth()
+  @UseGuards(UserJwtGuard)
+  @Post('storefront/logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  storefrontLogout(@Req() req: Request) {
+    const user = req.user as UserJwtPayload;
+    return this.authService.storefrontLogout(user.sub);
   }
 }

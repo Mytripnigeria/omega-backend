@@ -75,6 +75,11 @@ export class CreateOrderDto {
   @IsBoolean()
   isDelivery?: boolean;
 
+  @ApiPropertyOptional({ format: 'uuid', description: 'Existing customer to link this order to' })
+  @IsOptional()
+  @IsString()
+  customerId?: string;
+
   @ApiPropertyOptional({ example: 'John Doe' })
   @IsOptional()
   @IsString()

@@ -6,13 +6,16 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
 import { ShiftEntity, ShiftStatus } from './entities/shift.entity';
 import { CreateShiftDto } from './dto/create-shift.dto';
 import { UpdateShiftDto } from './dto/update-shift.dto';
 import { ShiftFilterDto } from './dto/shift-filter.dto';
 import { ShiftResponseDto } from './dto/shift-response.dto';
+import { CreateBreakDto } from './dto/break-dto';
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { JwtPayload } from '../../common/types/jwt-payload.types';
 
 @Injectable()
 export class ShiftsService {
@@ -162,6 +165,130 @@ export class ShiftsService {
         date: shift.date,
         durationMinutes: durationMs ? Math.round(durationMs / 60000) : null,
       },
+    });
+
+    return ShiftResponseDto.from(shift);
+  }
+
+  async adminEnd(
+    shiftId: string,
+    admin: { sub: string; email?: string; businessId: string },
+  ): Promise<ShiftResponseDto> {
+    const shift = await this.findEntityWithRelations(shiftId);
+    if (
+      shift.status === ShiftStatus.COMPLETED ||
+      shift.status === ShiftStatus.CANCELLED
+    ) {
+      throw new BadRequestException(`Cannot end shift: already ${shift.status}`);
+    }
+
+    shift.actualClockOut = new Date();
+    shift.status = ShiftStatus.COMPLETED;
+    await this.shiftRepo.save(shift);
+
+    const durationMs = shift.actualClockIn
+      ? shift.actualClockOut.getTime() - new Date(shift.actualClockIn).getTime()
+      : null;
+
+    this.activityLog.record({
+      actorType: 'admin',
+      actorId: admin.sub,
+      actorName: admin.email ?? 'Admin',
+      action: 'shift.admin_ended',
+      businessId: admin.businessId,
+      storeId: shift.storeId,
+      resourceType: 'shift',
+      resourceId: shift.id,
+      metadata: {
+        date: shift.date,
+        staffId: shift.staffId,
+        durationMinutes: durationMs ? Math.round(durationMs / 60000) : null,
+      },
+    });
+
+    return ShiftResponseDto.from(shift);
+  }
+
+  async addBreak(
+    shiftId: string,
+    actor: JwtPayload,
+    dto: CreateBreakDto,
+  ): Promise<ShiftResponseDto> {
+    const shift = await this.findEntityWithRelations(shiftId);
+
+    if (actor.sub_type === 'staff' && shift.staffId !== actor.sub) {
+      throw new ForbiddenException('You can only log breaks on your own shift');
+    }
+
+    const breakRecord = {
+      id: randomUUID(),
+      type: dto.type,
+      startTime: dto.startTime,
+      durationMinutes: dto.durationMinutes,
+      notes: dto.notes ?? null,
+    };
+
+    shift.breaks = [...(shift.breaks ?? []), breakRecord];
+    await this.shiftRepo.save(shift);
+
+    this.activityLog.record({
+      actorType: actor.sub_type,
+      actorId: actor.sub,
+      actorName:
+        actor.sub_type === 'admin'
+          ? actor.email ?? 'Admin'
+          : shift.staff
+            ? `${shift.staff.firstName} ${shift.staff.lastName}`
+            : 'Staff',
+      action: 'shift.break_added',
+      businessId: actor.businessId,
+      storeId: shift.storeId,
+      resourceType: 'shift',
+      resourceId: shift.id,
+      metadata: {
+        breakId: breakRecord.id,
+        type: breakRecord.type,
+        durationMinutes: breakRecord.durationMinutes,
+      },
+    });
+
+    return ShiftResponseDto.from(shift);
+  }
+
+  async deleteBreak(
+    shiftId: string,
+    breakId: string,
+    actor: JwtPayload,
+  ): Promise<ShiftResponseDto> {
+    const shift = await this.findEntityWithRelations(shiftId);
+
+    if (actor.sub_type === 'staff' && shift.staffId !== actor.sub) {
+      throw new ForbiddenException('You can only remove breaks on your own shift');
+    }
+
+    const before = shift.breaks ?? [];
+    const after = before.filter((b) => b.id !== breakId);
+    if (after.length === before.length) {
+      throw new NotFoundException('Break not found on this shift');
+    }
+    shift.breaks = after;
+    await this.shiftRepo.save(shift);
+
+    this.activityLog.record({
+      actorType: actor.sub_type,
+      actorId: actor.sub,
+      actorName:
+        actor.sub_type === 'admin'
+          ? actor.email ?? 'Admin'
+          : shift.staff
+            ? `${shift.staff.firstName} ${shift.staff.lastName}`
+            : 'Staff',
+      action: 'shift.break_removed',
+      businessId: actor.businessId,
+      storeId: shift.storeId,
+      resourceType: 'shift',
+      resourceId: shift.id,
+      metadata: { breakId },
     });
 
     return ShiftResponseDto.from(shift);

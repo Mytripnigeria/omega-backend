@@ -75,6 +75,16 @@ export class ShiftResponseDto {
     }>;
   }> | null;
 
+  @ApiPropertyOptional({ type: 'array', nullable: true })
+  @Expose()
+  breaks: Array<{
+    id: string;
+    type: 'lunch' | 'rest' | 'other';
+    startTime: string;
+    durationMinutes: number;
+    notes?: string | null;
+  }> | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)

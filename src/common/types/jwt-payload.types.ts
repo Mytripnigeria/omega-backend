@@ -16,4 +16,12 @@ export interface StaffJwtPayload {
   permissions: string[];
 }
 
-export type JwtPayload = AdminJwtPayload | StaffJwtPayload;
+export interface UserJwtPayload {
+  sub: string;
+  sub_type: 'user';
+  email: string;
+  businessId: string;
+  customerId: string;
+}
+
+export type JwtPayload = AdminJwtPayload | StaffJwtPayload | UserJwtPayload;

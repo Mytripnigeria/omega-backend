@@ -23,6 +23,7 @@ import {
 } from './dto/order-response.dto';
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { CustomersService } from '../customers/customers.service';
 
 const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PENDING]: [OrderStatus.PREPARING, OrderStatus.CANCELLED],
@@ -52,6 +53,7 @@ export class OrdersService {
     private readonly eventRepo: Repository<OrderStatusEventEntity>,
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
+    private readonly customersService: CustomersService,
   ) {}
 
   /**
@@ -98,6 +100,7 @@ export class OrdersService {
         storeId: actor.storeId!,
         staffId: actor.sub_type === 'staff' ? actor.sub : null,
         staffName: actor.actorName ?? null,
+        customerId: dto.customerId ?? null,
         customerName: dto.customerName ?? null,
         customerPhone: dto.customerPhone ?? null,
         tableNumber: dto.tableNumber ?? null,
@@ -153,6 +156,14 @@ export class OrdersService {
       metadata: { orderNumber: saved.orderNumber, total: Number(saved.total), itemCount: dto.items.length },
     });
 
+    if (saved.customerId) {
+      await this.customersService.recordOrder(saved.customerId, {
+        ordersDelta: 1,
+        spentDelta: Number(saved.total),
+        orderAt: saved.createdAt,
+      });
+    }
+
     return this.findOne(actor, saved.id);
   }
 
@@ -177,6 +188,7 @@ export class OrdersService {
       qb.andWhere('o.storeId = :scopedStore', { scopedStore: actor.storeId });
     }
     if (filter.staffId) qb.andWhere('o.staffId = :staffId', { staffId: filter.staffId });
+    if (filter.customerId) qb.andWhere('o.customerId = :customerId', { customerId: filter.customerId });
     if (filter.channel) qb.andWhere('o.channel = :channel', { channel: filter.channel });
 
     if (filter.status) {
@@ -333,6 +345,13 @@ export class OrdersService {
       resourceId: order.id,
       metadata: { orderNumber: order.orderNumber, reason: dto.reason ?? null },
     });
+
+    if (order.customerId) {
+      await this.customersService.recordOrder(order.customerId, {
+        ordersDelta: -1,
+        spentDelta: -Number(order.total),
+      });
+    }
 
     return this.findOne(actor, order.id);
   }

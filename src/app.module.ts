@@ -28,6 +28,13 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { DeliveriesModule } from './modules/deliveries/deliveries.module';
 import { ExpensesModule } from './modules/expenses/expenses.module';
 import { ReportsModule } from './modules/reports/reports.module';
+import { WorkstationSettingsModule } from './modules/workstation-settings/workstation-settings.module';
+import { UsersModule } from './modules/users/users.module';
+import { CustomersModule } from './modules/customers/customers.module';
+import { InventoryLocationsModule } from './modules/inventory-locations/inventory-locations.module';
+import { StockTransfersModule } from './modules/stock-transfers/stock-transfers.module';
+import { EquipmentModule } from './modules/equipment/equipment.module';
+import { SuppliersModule } from './modules/suppliers/suppliers.module';
 
 @Module({
   imports: [
@@ -63,6 +70,13 @@ import { ReportsModule } from './modules/reports/reports.module';
     DeliveriesModule,
     ExpensesModule,
     ReportsModule,
+    WorkstationSettingsModule,
+    UsersModule,
+    CustomersModule,
+    InventoryLocationsModule,
+    StockTransfersModule,
+    EquipmentModule,
+    SuppliersModule,
   ],
 })
 export class AppModule {}

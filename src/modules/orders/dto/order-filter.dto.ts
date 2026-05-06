@@ -14,6 +14,11 @@ export class OrderFilterDto extends PaginationQueryDto {
   @IsUUID()
   staffId?: string;
 
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  customerId?: string;
+
   @ApiPropertyOptional({
     description: 'Comma-separated list of statuses, e.g. `pending,preparing`',
     example: 'pending,preparing',

@@ -1,0 +1,54 @@
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { WorkstationSettingsEntity } from './entities/workstation-settings.entity';
+import { UpdateWorkstationSettingsDto } from './dto/update-workstation-settings.dto';
+import { WorkstationSettingsResponseDto } from './dto/workstation-settings-response.dto';
+import { ActivityLogService } from '../activity-log/activity-log.service';
+
+@Injectable()
+export class WorkstationSettingsService {
+  constructor(
+    @InjectRepository(WorkstationSettingsEntity)
+    private readonly repo: Repository<WorkstationSettingsEntity>,
+    private readonly activityLog: ActivityLogService,
+  ) {}
+
+  async get(businessId: string): Promise<WorkstationSettingsResponseDto> {
+    return WorkstationSettingsResponseDto.from(
+      await this.getEntity(businessId),
+    );
+  }
+
+  private async getEntity(businessId: string): Promise<WorkstationSettingsEntity> {
+    let settings = await this.repo.findOne({ where: { businessId } });
+    if (!settings) {
+      settings = this.repo.create({ businessId });
+      settings = await this.repo.save(settings);
+    }
+    return settings;
+  }
+
+  async update(
+    businessId: string,
+    actor: { sub: string; email?: string },
+    dto: UpdateWorkstationSettingsDto,
+  ): Promise<WorkstationSettingsResponseDto> {
+    const settings = await this.getEntity(businessId);
+    Object.assign(settings, dto);
+    const saved = await this.repo.save(settings);
+
+    this.activityLog.record({
+      actorType: 'admin',
+      actorId: actor.sub,
+      actorName: actor.email ?? 'Admin',
+      action: 'workstation_settings.updated',
+      businessId,
+      resourceType: 'workstation_settings',
+      resourceId: businessId,
+      metadata: { fields: Object.keys(dto) },
+    });
+
+    return WorkstationSettingsResponseDto.from(saved);
+  }
+}
