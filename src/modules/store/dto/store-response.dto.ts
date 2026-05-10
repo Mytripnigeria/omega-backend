@@ -65,6 +65,18 @@ export class StoreResponseDto {
   @Expose()
   deliveryRadiusKm: number | null;
 
+  @ApiProperty({ example: 1500 })
+  @Expose()
+  deliveryFee: number;
+
+  @ApiPropertyOptional({ example: 6.4541, nullable: true })
+  @Expose()
+  latitude: number | null;
+
+  @ApiPropertyOptional({ example: 3.3947, nullable: true })
+  @Expose()
+  longitude: number | null;
+
   @ApiProperty({ example: true })
   @Expose()
   isActive: boolean;
@@ -80,9 +92,20 @@ export class StoreResponseDto {
   updatedAt: Date;
 
   static from(entity: StoreEntity): StoreResponseDto {
-    return plainToInstance(StoreResponseDto, entity, {
-      excludeExtraneousValues: true,
-    });
+    return plainToInstance(
+      StoreResponseDto,
+      {
+        ...entity,
+        deliveryFee: Number(entity.deliveryFee ?? 0),
+        deliveryRadiusKm:
+          entity.deliveryRadiusKm == null ? null : Number(entity.deliveryRadiusKm),
+        latitude:
+          entity.latitude == null ? null : Number(entity.latitude),
+        longitude:
+          entity.longitude == null ? null : Number(entity.longitude),
+      },
+      { excludeExtraneousValues: true },
+    );
   }
 
   static fromMany(entities: StoreEntity[]): StoreResponseDto[] {

@@ -34,4 +34,10 @@ export default () => ({
     baseUrl: process.env.PAYSTACK_BASE_URL ?? 'https://api.paystack.co',
     webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET ?? process.env.PAYSTACK_SECRET_KEY ?? '',
   },
+  redis: {
+    host: process.env.REDIS_HOST ?? 'localhost',
+    port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
+    password: process.env.REDIS_PASSWORD || undefined,
+    tls: process.env.REDIS_TLS === 'true',
+  },
 });

@@ -14,6 +14,7 @@ import {
   ApiOkResponse,
   ApiNoContentResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { SecurityService } from './security.service';
 import { AdminLoginDto } from './dto/admin-login.dto';
@@ -58,6 +59,7 @@ export class AuthController {
       'All responses are wrapped: `{ success, data, timestamp }`.',
   })
   @ApiOkResponse({ type: AdminLoginResponseDto })
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post('admin/login')
   adminLogin(@Body() dto: AdminLoginDto) {
     return this.authService.adminLogin(dto);
@@ -185,12 +187,14 @@ export class AuthController {
       'Creates a storefront user account. If a customer with the same email or phone already exists ' +
       'in the business, the new user is linked to that existing customer; otherwise a new customer record is created.',
   })
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post('storefront/register')
   storefrontRegister(@Body() dto: StorefrontRegisterDto) {
     return this.authService.storefrontRegister(dto);
   }
 
   @ApiOperation({ summary: 'Storefront login' })
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post('storefront/login')
   storefrontLogin(@Body() dto: StorefrontLoginDto) {
     return this.authService.storefrontLogin(dto);

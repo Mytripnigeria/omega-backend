@@ -107,6 +107,13 @@ export class OrderEntity {
   @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
   refundedAmount: number;
 
+  @ApiProperty({
+    example: 0,
+    description: 'Loyalty points redeemed at checkout — used to refund on cancellation.',
+  })
+  @Column({ type: 'int', default: 0 })
+  pointsRedeemed: number;
+
   @ApiPropertyOptional({ format: 'uuid', nullable: true })
   @Column({ type: 'uuid', nullable: true })
   paymentMethodId: string | null;
@@ -157,6 +164,18 @@ export class OrderEntity {
   @ApiPropertyOptional({ nullable: true })
   @Column({ type: 'varchar', nullable: true })
   couponCode: string | null;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description: 'Redemption row id — used to release the coupon on cancellation.',
+  })
+  @Column({ type: 'uuid', nullable: true })
+  couponRedemptionId: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @Column({ type: 'uuid', nullable: true })
+  couponId: string | null;
 
   @ApiPropertyOptional({ example: 1000, nullable: true })
   @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })

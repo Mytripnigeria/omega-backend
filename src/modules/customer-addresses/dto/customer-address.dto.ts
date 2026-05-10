@@ -26,10 +26,10 @@ export class CreateCustomerAddressDto {
   @IsString()
   line2?: string;
 
-  @ApiProperty({ example: 'Lekki' })
+  @ApiPropertyOptional({ example: 'Lekki' })
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  city: string;
+  city?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

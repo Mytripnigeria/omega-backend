@@ -2,6 +2,7 @@ import {
   BadGatewayException,
   Injectable,
   Logger,
+  OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -81,10 +82,30 @@ interface RawTransaction {
 }
 
 @Injectable()
-export class PaystackService {
+export class PaystackService implements OnModuleInit {
   private readonly logger = new Logger(PaystackService.name);
 
   constructor(private readonly config: ConfigService) {}
+
+  onModuleInit(): void {
+    // Operators need to know about a misconfigured Paystack at boot — not
+    // when the first customer hits checkout.
+    if (!this.config.get<string>('paystack.secretKey')) {
+      this.logger.warn(
+        'PAYSTACK_SECRET_KEY is not configured — Paystack checkouts will fail.',
+      );
+    }
+    if (!this.config.get<string>('paystack.publicKey')) {
+      this.logger.warn(
+        'PAYSTACK_PUBLIC_KEY is not configured — the inline popup will not load on the storefront.',
+      );
+    }
+    if (!this.config.get<string>('paystack.webhookSecret')) {
+      this.logger.warn(
+        'PAYSTACK_WEBHOOK_SECRET is not set — falling back to PAYSTACK_SECRET_KEY for webhook verification.',
+      );
+    }
+  }
 
   private secretKey(): string {
     const k = this.config.get<string>('paystack.secretKey') ?? '';
@@ -209,6 +230,184 @@ export class PaystackService {
       );
     }
     return this.mapTransaction(json.data);
+  }
+
+  /**
+   * Issue a refund for a previously-paid Paystack transaction. Defaults to
+   * a full refund when `amount` is omitted. Returns Paystack's raw refund
+   * response shape.
+   */
+  async refund(reference: string, amount?: number): Promise<{
+    id: number | string;
+    transaction: { reference: string };
+    amount: number;
+    status: string;
+  }> {
+    const res = await fetch(`${this.baseUrl()}/refund`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.secretKey()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        transaction: reference,
+        ...(amount != null ? { amount: Math.round(amount) } : {}),
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      this.logger.error(`Paystack refund failed (${res.status}): ${body}`);
+      throw new BadGatewayException('Failed to issue refund');
+    }
+    const json = (await res.json()) as PaystackEnvelope<{
+      id: number | string;
+      transaction: { reference: string };
+      amount: number;
+      status: string;
+    }>;
+    if (!json.status) {
+      throw new BadGatewayException(json.message || 'Refund rejected by Paystack');
+    }
+    return json.data;
+  }
+
+  /**
+   * Register a transfer recipient (a bank account) on Paystack. The returned
+   * `recipientCode` is the persistent handle to use in `transfer()`.
+   */
+  async createTransferRecipient(opts: {
+    name: string;
+    accountNumber: string;
+    bankCode: string;
+    currency?: string;
+  }): Promise<{
+    recipientCode: string;
+    bankName: string | null;
+    accountName: string | null;
+  }> {
+    const res = await fetch(`${this.baseUrl()}/transferrecipient`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.secretKey()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        type: 'nuban',
+        name: opts.name,
+        account_number: opts.accountNumber,
+        bank_code: opts.bankCode,
+        currency: opts.currency ?? 'NGN',
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      this.logger.error(
+        `Paystack transferrecipient failed (${res.status}): ${body}`,
+      );
+      throw new BadGatewayException('Failed to register payout recipient');
+    }
+    const json = (await res.json()) as PaystackEnvelope<{
+      recipient_code: string;
+      details?: { account_name?: string; bank_name?: string };
+    }>;
+    if (!json.status) {
+      throw new BadGatewayException(
+        json.message || 'Paystack rejected the recipient details',
+      );
+    }
+    return {
+      recipientCode: json.data.recipient_code,
+      bankName: json.data.details?.bank_name ?? null,
+      accountName: json.data.details?.account_name ?? null,
+    };
+  }
+
+  /**
+   * Initiate a transfer to a previously-registered recipient. Returns the
+   * transfer's reference + Paystack status string. The transfer is usually
+   * `pending` until Paystack settles it; the webhook (`transfer.success` /
+   * `transfer.failed`) closes it out.
+   */
+  async transfer(opts: {
+    recipientCode: string;
+    amount: number; // kobo
+    reference: string;
+    reason?: string;
+  }): Promise<{
+    transferCode: string;
+    reference: string;
+    status: string;
+    amount: number;
+  }> {
+    const res = await fetch(`${this.baseUrl()}/transfer`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.secretKey()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        source: 'balance',
+        recipient: opts.recipientCode,
+        amount: Math.round(opts.amount),
+        reference: opts.reference,
+        reason: opts.reason ?? `Payout ${opts.reference}`,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      this.logger.error(`Paystack transfer failed (${res.status}): ${body}`);
+      throw new BadGatewayException('Failed to initiate transfer');
+    }
+    const json = (await res.json()) as PaystackEnvelope<{
+      transfer_code: string;
+      reference: string;
+      status: string;
+      amount: number;
+    }>;
+    if (!json.status) {
+      throw new BadGatewayException(
+        json.message || 'Paystack rejected the transfer',
+      );
+    }
+    return {
+      transferCode: json.data.transfer_code,
+      reference: json.data.reference,
+      status: json.data.status,
+      amount: json.data.amount,
+    };
+  }
+
+  /**
+   * Look up a previously-initiated transfer by its reference. Used by the
+   * payout worker to reconcile state when the webhook is delayed.
+   */
+  async verifyTransfer(reference: string): Promise<{
+    reference: string;
+    status: string;
+    amount: number;
+  }> {
+    const res = await fetch(
+      `${this.baseUrl()}/transfer/verify/${encodeURIComponent(reference)}`,
+      { headers: { Authorization: `Bearer ${this.secretKey()}` } },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      this.logger.error(
+        `Paystack verify transfer failed (${res.status}): ${body}`,
+      );
+      throw new BadGatewayException('Failed to verify transfer');
+    }
+    const json = (await res.json()) as PaystackEnvelope<{
+      reference: string;
+      status: string;
+      amount: number;
+    }>;
+    if (!json.status) {
+      throw new BadGatewayException(
+        json.message || 'Paystack returned an error on verify',
+      );
+    }
+    return json.data;
   }
 
   /**

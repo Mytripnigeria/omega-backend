@@ -70,6 +70,22 @@ export class RecordPaymentDto {
   @IsOptional()
   @IsUUID()
   paymentMethodId?: string;
+
+  @ApiPropertyOptional({
+    enum: ['paystack', 'card', 'cash', 'wallet', 'points'],
+    description:
+      'Payment channel for this transaction. Stored on the order if not already set.',
+  })
+  @IsOptional()
+  @IsEnum(['paystack', 'card', 'cash', 'wallet', 'points'])
+  paymentChannel?: 'paystack' | 'card' | 'cash' | 'wallet' | 'points';
+
+  @ApiPropertyOptional({
+    description: 'Provider reference (Paystack reference, transfer slip, etc.)',
+  })
+  @IsOptional()
+  @IsString()
+  paymentReference?: string;
 }
 
 export class UpdatePrepStatusDto {

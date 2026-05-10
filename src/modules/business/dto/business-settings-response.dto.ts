@@ -47,6 +47,10 @@ export class BusinessSettingsResponseDto {
   @Expose()
   notificationDoNotDisturbEnd: string | null;
 
+  @ApiProperty({ example: 0.075, description: 'Tax rate fraction (0.075 = 7.5%)' })
+  @Expose()
+  taxRate: number;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)
@@ -58,8 +62,10 @@ export class BusinessSettingsResponseDto {
   updatedAt: Date;
 
   static from(entity: BusinessSettingsEntity): BusinessSettingsResponseDto {
-    return plainToInstance(BusinessSettingsResponseDto, entity, {
-      excludeExtraneousValues: true,
-    });
+    return plainToInstance(
+      BusinessSettingsResponseDto,
+      { ...entity, taxRate: Number(entity.taxRate ?? 0.075) },
+      { excludeExtraneousValues: true },
+    );
   }
 }

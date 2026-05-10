@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -24,8 +25,18 @@ import {
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { CustomersService } from '../customers/customers.service';
+import { CouponsService } from '../coupons/coupons.service';
+import { CustomerEntity } from '../customers/entities/customer.entity';
+import {
+  PointsTransactionEntity,
+  PointsTransactionType,
+  WalletTransactionEntity,
+  WalletTransactionType,
+} from '../customers/entities/wallet-transaction.entity';
+import { PaystackService } from '../paystack/paystack.service';
 import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
 import { TransactionMethod } from '../financial-transactions/entities/financial-transaction.entity';
+import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.service';
 
 const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PENDING]: [OrderStatus.PREPARING, OrderStatus.CANCELLED],
@@ -46,6 +57,8 @@ interface ActorContext {
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     @InjectRepository(OrderEntity)
     private readonly orderRepo: Repository<OrderEntity>,
@@ -57,6 +70,9 @@ export class OrdersService {
     private readonly activityLog: ActivityLogService,
     private readonly customersService: CustomersService,
     private readonly ledger: FinancialTransactionsService,
+    private readonly coupons: CouponsService,
+    private readonly paystack: PaystackService,
+    private readonly merchantWallet: MerchantWalletService,
   ) {}
 
   private mapPaymentChannelToMethod(
@@ -331,9 +347,22 @@ export class OrdersService {
     }
 
     const fromStatus = order.status;
+    const wasPaid = order.paymentStatus === 'paid';
     order.status = OrderStatus.CANCELLED;
 
     await this.dataSource.transaction(async (m) => {
+      // Refund the customer's monetary artefacts inside the same tx as the
+      // status change so a refund failure rolls back the cancellation.
+      await this.refundOrderArtefacts(m, order, actor);
+
+      // Mark the order as fully refunded after compensation if it was paid.
+      if (wasPaid) {
+        order.paymentStatus = 'refunded';
+        order.refundedAmount = Number(order.paidAmount);
+      } else if (order.paymentStatus === 'pending') {
+        order.paymentStatus = 'failed';
+      }
+
       await m.save(order);
       await m.save(
         m.create(OrderStatusEventEntity, {
@@ -369,6 +398,158 @@ export class OrdersService {
     return this.findOne(actor, order.id);
   }
 
+  /**
+   * Inverts every monetary side-effect of an order on cancellation:
+   *  • returns wallet pre-debit (storefront wallet orders held funds at place())
+   *  • re-credits redeemed loyalty points
+   *  • releases the coupon usage counter + redemption row
+   *  • for paid Paystack orders, issues a Paystack refund and emits a debit
+   *    on the financial ledger
+   *
+   * Idempotent — safe to re-run because each step checks for non-zero state
+   * before writing.
+   */
+  private async refundOrderArtefacts(
+    mgr: import('typeorm').EntityManager,
+    order: OrderEntity,
+    actor: ActorContext,
+  ): Promise<void> {
+    const customerRepo = mgr.getRepository(CustomerEntity);
+    const walletTxRepo = mgr.getRepository(WalletTransactionEntity);
+    const pointsTxRepo = mgr.getRepository(PointsTransactionEntity);
+
+    // Restore wallet held by storefront wallet/points pre-debit OR refund a
+    // wallet-paid order. For Paystack-paid orders, the refund happens via
+    // Paystack below and we don't touch the wallet balance.
+    if (order.customerId && order.paymentChannel === 'wallet' && Number(order.total) > 0) {
+      const customer = await customerRepo.findOne({ where: { id: order.customerId } });
+      if (customer) {
+        const refundAmount = Number(order.paidAmount) > 0
+          ? Number(order.paidAmount)
+          : Number(order.total);
+        if (refundAmount > 0) {
+          customer.walletBalance = Number(customer.walletBalance) + refundAmount;
+          await customerRepo.save(customer);
+          const tx = await walletTxRepo.save(
+            walletTxRepo.create({
+              customerId: customer.id,
+              type: WalletTransactionType.CREDIT,
+              amount: refundAmount,
+              balance: Number(customer.walletBalance),
+              description: `Refund — order #${order.orderNumber} cancelled`,
+              reference: `order:${order.id}`,
+            }),
+          );
+          await this.ledger.record(
+            {
+              businessId: order.businessId,
+              storeId: order.storeId,
+              type: 'debit',
+              purpose: 'order_refund',
+              amount: refundAmount,
+              method: 'wallet',
+              reference: `order:${order.id}`,
+              description: `Wallet refund — order #${order.orderNumber}`,
+              linkedType: 'wallet_tx',
+              linkedId: tx.id,
+              customerId: customer.id,
+              customerName: customer.firstName
+                ? `${customer.firstName} ${customer.lastName}`.trim()
+                : null,
+              staffId: actor.sub,
+              staffName: actor.actorName ?? null,
+            },
+            mgr,
+          );
+        }
+      }
+    }
+
+    // Restore loyalty points redeemed at checkout.
+    if (order.customerId && order.pointsRedeemed > 0) {
+      const customer = await customerRepo.findOne({ where: { id: order.customerId } });
+      if (customer) {
+        customer.points = customer.points + order.pointsRedeemed;
+        await customerRepo.save(customer);
+        await pointsTxRepo.save(
+          pointsTxRepo.create({
+            customerId: customer.id,
+            type: PointsTransactionType.ADJUSTED,
+            points: order.pointsRedeemed,
+            balance: customer.points,
+            description: `Refund — order #${order.orderNumber} cancelled`,
+            orderId: order.id,
+          }),
+        );
+      }
+    }
+
+    // Release the coupon: decrement usageCount and remove the redemption row.
+    if (order.couponId) {
+      await this.coupons.unredeem(order.couponId, order.couponRedemptionId, mgr);
+    }
+
+    // Issue Paystack refund for paid card orders. Wrap the network call in a
+    // try/catch so a Paystack outage doesn't break the cancellation — the
+    // refund will still appear on the order's audit trail and admin can
+    // re-issue manually.
+    if (
+      order.paymentChannel === 'paystack' &&
+      order.paymentStatus === 'paid' &&
+      order.paymentReference &&
+      Number(order.paidAmount) > 0
+    ) {
+      try {
+        const refundAmount = Number(order.paidAmount);
+        await this.paystack.refund(
+          order.paymentReference,
+          Math.round(refundAmount * 100),
+        );
+        await this.ledger.record(
+          {
+            businessId: order.businessId,
+            storeId: order.storeId,
+            type: 'debit',
+            purpose: 'order_refund',
+            amount: refundAmount,
+            method: this.mapPaymentChannelToMethod(order.paymentChannel),
+            reference: order.paymentReference,
+            description: `Paystack refund — order #${order.orderNumber}`,
+            linkedType: 'order',
+            linkedId: order.id,
+            customerId: order.customerId,
+            customerName: order.customerName,
+            staffId: actor.sub,
+            staffName: actor.actorName ?? null,
+          },
+          mgr,
+        );
+        // Reverse the original merchant-wallet credit. Allow overdraft so a
+        // merchant who already paid out can still issue refunds — wallet may
+        // go negative until offset by future order revenue.
+        await this.merchantWallet.debit(
+          {
+            businessId: order.businessId,
+            storeId: order.storeId,
+            reason: 'order_refund',
+            amount: refundAmount,
+            description: `Refund — order #${order.orderNumber}`,
+            linkedType: 'order',
+            linkedId: order.id,
+            allowOverdraft: true,
+          },
+          mgr,
+        );
+      } catch (err) {
+        // Don't block the cancel — admin will re-issue manually.
+        // Re-throw a softer error so the caller still sees something useful.
+        throw new BadRequestException(
+          `Paystack refund failed: ${(err as Error).message}. Cancel rolled back.`,
+        );
+      }
+    }
+  }
+
   async recordPayment(
     actor: ActorContext,
     id: string,
@@ -385,6 +566,8 @@ export class OrdersService {
     await this.dataSource.transaction(async (m) => {
       order.paidAmount = Number(order.paidAmount) + amount;
       if (dto.paymentMethodId) order.paymentMethodId = dto.paymentMethodId;
+      if (dto.paymentChannel) order.paymentChannel = dto.paymentChannel;
+      if (dto.paymentReference) order.paymentReference = dto.paymentReference;
       if (Number(order.paidAmount) >= Number(order.total)) {
         order.paidAt = new Date();
         order.paymentStatus = 'paid';
@@ -413,6 +596,33 @@ export class OrdersService {
         },
         m,
       );
+
+      // Credit the merchant payout wallet for genuinely new money. Cash sits
+      // in the till; wallet/points are intra-account movement and don't bring
+      // payable cash to the merchant. Paystack/card payments do.
+      if (
+        order.paymentChannel === 'paystack' ||
+        order.paymentChannel === 'card'
+      ) {
+        try {
+          await this.merchantWallet.credit(
+            {
+              businessId: order.businessId,
+              storeId: order.storeId,
+              reason: 'order_payment',
+              amount,
+              description: `Order #${order.orderNumber} payment`,
+              linkedType: 'order',
+              linkedId: order.id,
+            },
+            m,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `Merchant wallet credit failed for order ${order.id}: ${(err as Error).message}`,
+          );
+        }
+      }
     });
 
     this.activityLog.record({
@@ -491,6 +701,32 @@ export class OrdersService {
         },
         m,
       );
+
+      // Reverse the original merchant-wallet credit for paystack/card orders.
+      if (
+        order.paymentChannel === 'paystack' ||
+        order.paymentChannel === 'card'
+      ) {
+        try {
+          await this.merchantWallet.debit(
+            {
+              businessId: order.businessId,
+              storeId: order.storeId,
+              reason: 'order_refund',
+              amount,
+              description: `Refund — order #${order.orderNumber}${dto.reason ? ` — ${dto.reason}` : ''}`,
+              linkedType: 'order',
+              linkedId: order.id,
+              allowOverdraft: true,
+            },
+            m,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `Merchant wallet refund debit failed for order ${order.id}: ${(err as Error).message}`,
+          );
+        }
+      }
     });
 
     this.activityLog.record({

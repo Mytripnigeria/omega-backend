@@ -7,6 +7,12 @@ import { StoreEntity } from '../store/entities/store.entity';
 import { CustomerAddressEntity } from '../customer-addresses/entities/customer-address.entity';
 import { CustomerPaymentMethodEntity } from '../customer-payment-methods/entities/customer-payment-method.entity';
 import { ProductEntity } from '../products/entities/product.entity';
+import { CustomerEntity } from '../customers/entities/customer.entity';
+import {
+  PointsTransactionEntity,
+  WalletTransactionEntity,
+} from '../customers/entities/wallet-transaction.entity';
+import { PaystackModule } from '../paystack/paystack.module';
 import { OrdersService } from './orders.service';
 import { StorefrontOrdersService } from './storefront-orders.service';
 import { OrdersController } from './orders.controller';
@@ -19,6 +25,9 @@ import { CustomersModule } from '../customers/customers.module';
 import { CouponsModule } from '../coupons/coupons.module';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { ReferralsModule } from '../referrals/referrals.module';
+import { BusinessModule } from '../business/business.module';
+import { ComboEntity } from '../combos/entities/combo.entity';
+import { ProductVariationEntity } from '../products/entities/product-variation.entity';
 
 @Module({
   imports: [
@@ -30,12 +39,19 @@ import { ReferralsModule } from '../referrals/referrals.module';
       CustomerAddressEntity,
       CustomerPaymentMethodEntity,
       ProductEntity,
+      ProductVariationEntity,
+      ComboEntity,
+      CustomerEntity,
+      WalletTransactionEntity,
+      PointsTransactionEntity,
     ]),
     ActivityLogModule,
     CustomersModule,
     CouponsModule,
     LoyaltyModule,
     ReferralsModule,
+    BusinessModule,
+    PaystackModule,
   ],
   controllers: [
     OrdersController,

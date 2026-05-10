@@ -39,6 +39,8 @@ import {
 } from './dto/theme.dto';
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { BusinessService } from '../business/business.service';
+import { LoyaltyService } from '../loyalty/loyalty.service';
 import { AdminJwtPayload } from '../../common/types/jwt-payload.types';
 
 const SYSTEM_PRESETS: Array<
@@ -108,6 +110,8 @@ export class StorefrontService implements OnModuleInit {
     @InjectRepository(StorefrontPageViewEntity)
     private readonly viewRepo: Repository<StorefrontPageViewEntity>,
     private readonly activityLog: ActivityLogService,
+    private readonly business: BusinessService,
+    private readonly loyalty: LoyaltyService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -125,7 +129,27 @@ export class StorefrontService implements OnModuleInit {
   // ---------- Config ----------
 
   async getConfig(businessId: string): Promise<StorefrontConfigResponseDto> {
-    return StorefrontConfigResponseDto.from(await this.getConfigEntity(businessId));
+    return this.composeConfig(await this.getConfigEntity(businessId), businessId);
+  }
+
+  /**
+   * Resolves the per-business pricing knobs (VAT, points-per-naira, naira-per-point)
+   * from BusinessSettings + LoyaltySettings and decorates the storefront config so
+   * the public storefront and admin both render consistent totals.
+   */
+  private async composeConfig(
+    entity: StorefrontConfigEntity,
+    businessId: string,
+  ): Promise<StorefrontConfigResponseDto> {
+    const [biz, loyalty] = await Promise.all([
+      this.business.getSettings(businessId).catch(() => null),
+      this.loyalty.getSettings(businessId).catch(() => null),
+    ]);
+    return StorefrontConfigResponseDto.from(entity, {
+      taxRate: biz?.taxRate ?? 0.075,
+      pointsPerNaira: loyalty?.pointsPerNaira ?? 0.1,
+      nairaPerPoint: loyalty?.nairaPerPoint ?? 0.1,
+    });
   }
 
   private async getConfigEntity(
@@ -176,7 +200,7 @@ export class StorefrontService implements OnModuleInit {
       metadata: { fields: Object.keys(dto) },
     });
 
-    return StorefrontConfigResponseDto.from(saved);
+    return this.composeConfig(saved, actor.businessId);
   }
 
   // ---------- Themes ----------

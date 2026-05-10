@@ -120,4 +120,28 @@ export class CreateStoreDto {
   @IsOptional()
   @IsNumber()
   deliveryRadiusKm?: number;
+
+  @ApiPropertyOptional({
+    example: 1500,
+    description: 'Flat delivery fee charged to the customer for delivery orders, in ₦.',
+  })
+  @IsOptional()
+  @IsNumber()
+  deliveryFee?: number;
+
+  @ApiPropertyOptional({
+    example: 6.4541,
+    description: 'Latitude of the store, used for haversine delivery-radius checks.',
+  })
+  @IsOptional()
+  @IsNumber()
+  latitude?: number;
+
+  @ApiPropertyOptional({
+    example: 3.3947,
+    description: 'Longitude of the store, used for haversine delivery-radius checks.',
+  })
+  @IsOptional()
+  @IsNumber()
+  longitude?: number;
 }

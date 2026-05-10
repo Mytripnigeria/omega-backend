@@ -36,10 +36,23 @@ export class StorefrontOrderItemDto {
   @Min(1)
   quantity: number;
 
-  @ApiProperty({ description: 'Per-unit price (kobo)' })
+  @ApiPropertyOptional({
+    description:
+      'Optional advisory unit price — IGNORED by the server. The backend re-derives ' +
+      'unit price from the product / combo / variation snapshot to prevent price tampering.',
+  })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  unitPrice: number;
+  unitPrice?: number;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Selected variation id (within the chosen product). Defines the unit price.',
+  })
+  @IsOptional()
+  @IsUUID()
+  variationId?: string;
 
   @ApiPropertyOptional({ type: 'object', additionalProperties: true })
   @IsOptional()

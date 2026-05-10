@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import {
   CouponEntity,
   CouponRedemptionEntity,
@@ -24,6 +24,7 @@ interface ApplyCouponResult {
   coupon: CouponEntity;
   discountAmount: number;
   applicableSubtotal: number;
+  redemptionId: string;
 }
 
 export interface CartLineForCoupon {
@@ -202,6 +203,10 @@ export class CouponsService {
   /**
    * Atomically reserve a coupon for redemption: validates, increments usageCount,
    * and writes a redemption record. Returns the discount amount.
+   *
+   * If a caller `EntityManager` is supplied (e.g. order placement that wants
+   * coupon redemption to commit/rollback with the order itself), the redeem
+   * runs inside that transaction. Otherwise it opens its own.
    */
   async redeem(
     businessId: string,
@@ -210,8 +215,9 @@ export class CouponsService {
     subtotal: number,
     orderId: string | null,
     items: CartLineForCoupon[] = [],
+    manager?: EntityManager,
   ): Promise<ApplyCouponResult> {
-    return this.dataSource.transaction(async (mgr) => {
+    const work = async (mgr: EntityManager): Promise<ApplyCouponResult> => {
       const upperCode = code.trim().toUpperCase();
       const coupon = await mgr
         .getRepository(CouponEntity)
@@ -268,7 +274,7 @@ export class CouponsService {
       coupon.usageCount += 1;
       await mgr.getRepository(CouponEntity).save(coupon);
 
-      await mgr.getRepository(CouponRedemptionEntity).save(
+      const redemption = await mgr.getRepository(CouponRedemptionEntity).save(
         mgr.getRepository(CouponRedemptionEntity).create({
           couponId: coupon.id,
           customerId,
@@ -277,8 +283,40 @@ export class CouponsService {
         }),
       );
 
-      return { coupon, discountAmount, applicableSubtotal };
-    });
+      return { coupon, discountAmount, applicableSubtotal, redemptionId: redemption.id };
+    };
+    return manager ? work(manager) : this.dataSource.transaction(work);
+  }
+
+  /**
+   * Inverse of {@link redeem}: decrements the coupon's `usageCount` and removes
+   * the linked `CouponRedemptionEntity`. Used by order cancellation to release
+   * the slot the customer occupied at checkout. Idempotent — silently no-ops
+   * if the redemption row is already gone.
+   */
+  async unredeem(
+    couponId: string,
+    redemptionId: string | null,
+    manager?: EntityManager,
+  ): Promise<void> {
+    const work = async (mgr: EntityManager) => {
+      const couponRepo = mgr.getRepository(CouponEntity);
+      const redemptionRepo = mgr.getRepository(CouponRedemptionEntity);
+      const redemption = redemptionId
+        ? await redemptionRepo.findOne({ where: { id: redemptionId } })
+        : null;
+      if (redemptionId && !redemption) return;
+      if (redemption) await redemptionRepo.delete(redemption.id);
+      const coupon = await couponRepo
+        .createQueryBuilder('c')
+        .setLock('pessimistic_write')
+        .where('c.id = :id', { id: couponId })
+        .getOne();
+      if (!coupon) return;
+      coupon.usageCount = Math.max(0, coupon.usageCount - 1);
+      await couponRepo.save(coupon);
+    };
+    return manager ? work(manager) : this.dataSource.transaction(work);
   }
 
   /**

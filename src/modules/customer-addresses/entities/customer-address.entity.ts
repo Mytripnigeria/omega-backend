@@ -37,9 +37,9 @@ export class CustomerAddressEntity {
   @Column({ type: 'varchar', nullable: true })
   line2: string | null;
 
-  @ApiProperty({ example: 'Lekki' })
-  @Column()
-  city: string;
+  @ApiPropertyOptional({ example: 'Lekki', nullable: true })
+  @Column({ type: 'varchar', nullable: true })
+  city: string | null;
 
   @ApiPropertyOptional({ nullable: true })
   @Column({ type: 'varchar', nullable: true })

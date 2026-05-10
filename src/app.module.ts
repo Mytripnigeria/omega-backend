@@ -1,5 +1,11 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule as NestConfigModule } from '@nestjs/config';
+import {
+  ConfigModule as NestConfigModule,
+  ConfigService,
+} from '@nestjs/config';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
+import { APP_GUARD } from '@nestjs/core';
 import configuration from './config/configuration';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -47,6 +53,8 @@ import { FinancialTransactionsModule } from './modules/financial-transactions/fi
 import { CashSessionsModule } from './modules/cash-sessions/cash-sessions.module';
 import { LoyaltyModule } from './modules/loyalty/loyalty.module';
 import { ReferralsModule } from './modules/referrals/referrals.module';
+import { MerchantWalletModule } from './modules/merchant-wallet/merchant-wallet.module';
+import { PayoutsModule } from './modules/payouts/payouts.module';
 
 @Module({
   imports: [
@@ -54,6 +62,22 @@ import { ReferralsModule } from './modules/referrals/referrals.module';
       isGlobal: true,
       load: [configuration],
       envFilePath: '.env',
+    }),
+    ThrottlerModule.forRoot([
+      // Default global throttle: 120 requests / minute / IP. Hot endpoints
+      // (login, register, coupon validate) override this with @Throttle.
+      { ttl: 60_000, limit: 120 },
+    ]),
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get<string>('redis.host') as string,
+          port: config.get<number>('redis.port') as number,
+          password: config.get<string>('redis.password') as string | undefined,
+          tls: config.get<boolean>('redis.tls') ? {} : undefined,
+        },
+      }),
     }),
     DatabaseModule,
     BusinessModule,
@@ -101,6 +125,9 @@ import { ReferralsModule } from './modules/referrals/referrals.module';
     CashSessionsModule,
     LoyaltyModule,
     ReferralsModule,
+    MerchantWalletModule,
+    PayoutsModule,
   ],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

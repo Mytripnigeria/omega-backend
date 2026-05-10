@@ -319,19 +319,15 @@ export class AuthService {
     const ok = await bcrypt.compare(dto.refreshToken, user.refreshTokenHash);
     if (!ok) throw new UnauthorizedException('Invalid refresh token');
 
-    const newPayload: UserJwtPayload = {
-      sub: user.id,
-      sub_type: 'user',
-      email: user.email,
-      businessId: user.businessId,
-      customerId: user.customerId,
-    };
-    const accessToken = this.jwtService.sign(newPayload, {
-      secret: this.configService.get<string>('jwt.secret') as string,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expiresIn: this.configService.get('jwt.expiresIn') as any,
-    });
-    return { accessToken };
+    // Refresh-token rotation: mint a fresh access + refresh pair, persist the
+    // new hashed refresh token, and invalidate the old one so it can't be
+    // reused. The client stores both new tokens.
+    return this.issueUserTokens(
+      user.id,
+      user.email,
+      user.businessId,
+      user.customerId,
+    );
   }
 
   async storefrontLogout(userId: string): Promise<void> {

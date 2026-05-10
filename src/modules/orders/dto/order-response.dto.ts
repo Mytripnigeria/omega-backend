@@ -150,6 +150,10 @@ export class OrderResponseDto {
   @Expose()
   refundedAmount: number;
 
+  @ApiProperty({ example: 0 })
+  @Expose()
+  pointsRedeemed: number;
+
   @ApiPropertyOptional({ format: 'uuid', nullable: true })
   @Expose()
   paymentMethodId: string | null;

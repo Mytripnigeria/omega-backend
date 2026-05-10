@@ -5,7 +5,7 @@ import {
   Param,
   Query,
 } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ProductEntity } from '../products/entities/product.entity';
@@ -30,6 +30,90 @@ export class PublicMenuController {
     @InjectRepository(StoreEntity)
     private readonly storeRepo: Repository<StoreEntity>,
   ) {}
+
+  @ApiOperation({
+    summary: 'Store availability',
+    description:
+      'Returns the bookable time slots for a given store on a date, derived from ' +
+      '`store.openingHours`. Used by the storefront time picker.',
+  })
+  @ApiParam({ name: 'storeId', format: 'uuid' })
+  @ApiQuery({ name: 'businessId', format: 'uuid' })
+  @ApiQuery({
+    name: 'date',
+    required: false,
+    example: '2026-05-10',
+    description: 'YYYY-MM-DD; defaults to today (in the store\'s local time).',
+  })
+  @Get('stores/:storeId/availability')
+  async availability(
+    @Param('storeId') storeId: string,
+    @Query('businessId') businessId: string,
+    @Query('date') date?: string,
+  ) {
+    if (!businessId) throw new BadRequestException('businessId is required');
+    const store = await this.storeRepo.findOne({
+      where: { id: storeId, businessId, isActive: true },
+    });
+    if (!store) throw new BadRequestException('Store not found');
+    return this.computeAvailability(store, date);
+  }
+
+  private computeAvailability(
+    store: StoreEntity,
+    isoDate?: string,
+  ): { date: string; asapAvailable: boolean; slots: { startsAt: string; endsAt: string }[] } {
+    const now = new Date();
+    const target = isoDate ? new Date(`${isoDate}T00:00:00`) : new Date(now);
+    target.setHours(0, 0, 0, 0);
+    const dateStr = target.toISOString().slice(0, 10);
+    const isToday = dateStr === now.toISOString().slice(0, 10);
+
+    const dayKeys = [
+      'sunday',
+      'monday',
+      'tuesday',
+      'wednesday',
+      'thursday',
+      'friday',
+      'saturday',
+    ] as const;
+    const day = dayKeys[target.getDay()];
+    const slot = store.openingHours?.[day];
+
+    // No hours configured — assume always open during business hours.
+    if (!slot || slot.closed) {
+      return { date: dateStr, asapAvailable: false, slots: [] };
+    }
+
+    const [oh, om] = slot.open.split(':').map((n) => parseInt(n, 10));
+    const [ch, cm] = slot.close.split(':').map((n) => parseInt(n, 10));
+    const stepMin = 30;
+    const slots: { startsAt: string; endsAt: string }[] = [];
+    let cursor = new Date(target);
+    cursor.setHours(oh, om, 0, 0);
+    const endOfDay = new Date(target);
+    endOfDay.setHours(ch, cm, 0, 0);
+    if (isToday && cursor < now) {
+      // Round up to the next 30-min mark from now.
+      const nowRounded = new Date(now);
+      nowRounded.setSeconds(0, 0);
+      const minsPast = nowRounded.getMinutes() % stepMin;
+      if (minsPast > 0) nowRounded.setMinutes(nowRounded.getMinutes() + (stepMin - minsPast));
+      cursor = nowRounded;
+    }
+    while (cursor.getTime() + stepMin * 60_000 <= endOfDay.getTime()) {
+      const next = new Date(cursor.getTime() + stepMin * 60_000);
+      slots.push({ startsAt: cursor.toISOString(), endsAt: next.toISOString() });
+      cursor = next;
+    }
+
+    const openMs = new Date(target).setHours(oh, om, 0, 0);
+    const asapAvailable =
+      isToday && now.getTime() >= openMs && now.getTime() < endOfDay.getTime();
+
+    return { date: dateStr, asapAvailable, slots };
+  }
 
   @ApiOperation({
     summary: 'List active stores',

@@ -61,6 +61,14 @@ export class BusinessSettingsEntity {
   @Column({ nullable: true, type: 'varchar', length: 5 })
   notificationDoNotDisturbEnd: string | null;
 
+  @ApiProperty({
+    example: 0.075,
+    default: 0.075,
+    description: 'VAT rate applied at checkout, expressed as a fraction (0.075 = 7.5%).',
+  })
+  @Column({ type: 'decimal', precision: 5, scale: 4, default: 0.075 })
+  taxRate: number;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn()
   createdAt: Date;

@@ -1,5 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class UpdateBusinessSettingsDto {
   @ApiPropertyOptional({ example: 'Thank you for dining with Mr Jollof!', maxLength: 500 })
@@ -53,4 +62,14 @@ export class UpdateBusinessSettingsDto {
   @IsOptional()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Must be HH:MM (24h)' })
   notificationDoNotDisturbEnd?: string | null;
+
+  @ApiPropertyOptional({
+    example: 0.075,
+    description: 'VAT rate fraction (0.075 = 7.5%). Range 0–1.',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  taxRate?: number;
 }

@@ -2,16 +2,34 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { NestExpressApplication } from '@nestjs/platform-express';
+import helmet from 'helmet';
+import { json, raw } from 'express';
 import { AppModule } from './app.module';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('port') ?? 3000;
   const nodeEnv = process.env.NODE_ENV ?? 'development';
+
+  // Paystack webhook needs the *raw* body for HMAC signature verification.
+  // Mount the raw parser only on that path before the global JSON parser
+  // touches it; everything else uses the standard JSON body parser.
+  app.use('/api/webhooks/paystack', raw({ type: '*/*' }));
+  app.use(json({ limit: '5mb' }));
+
+  // Production hardening: security headers via helmet. Disable CSP — the API
+  // serves JSON, not HTML, and CSP would interfere with Swagger in dev.
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+    }),
+  );
 
   // `origin: true` reflects the request's Origin header — required for
   // credentialed requests since browsers reject `Access-Control-Allow-Origin: *`

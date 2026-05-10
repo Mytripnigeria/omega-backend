@@ -9,6 +9,8 @@ import { StorefrontService } from './storefront.service';
 import { StorefrontController } from './storefront.controller';
 import { PublicStorefrontController } from './public-storefront.controller';
 import { ActivityLogModule } from '../activity-log/activity-log.module';
+import { BusinessModule } from '../business/business.module';
+import { LoyaltyModule } from '../loyalty/loyalty.module';
 
 @Module({
   imports: [
@@ -20,6 +22,8 @@ import { ActivityLogModule } from '../activity-log/activity-log.module';
       StorefrontPageViewEntity,
     ]),
     ActivityLogModule,
+    BusinessModule,
+    LoyaltyModule,
   ],
   controllers: [StorefrontController, PublicStorefrontController],
   providers: [StorefrontService],

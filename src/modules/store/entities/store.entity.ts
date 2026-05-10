@@ -86,6 +86,30 @@ export class StoreEntity {
   @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
   deliveryRadiusKm: number | null;
 
+  @ApiProperty({
+    example: 1500,
+    default: 0,
+    description: 'Flat delivery fee charged for delivery orders, in ₦.',
+  })
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
+  deliveryFee: number;
+
+  @ApiPropertyOptional({
+    example: 6.4541,
+    nullable: true,
+    description: 'Latitude of the store, used for delivery-radius checks',
+  })
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  latitude: number | null;
+
+  @ApiPropertyOptional({
+    example: 3.3947,
+    nullable: true,
+    description: 'Longitude of the store, used for delivery-radius checks',
+  })
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  longitude: number | null;
+
   @ApiProperty({ example: true, default: true })
   @Column({ default: true })
   isActive: boolean;

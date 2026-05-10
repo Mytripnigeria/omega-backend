@@ -386,6 +386,18 @@ export class StorefrontConfigResponseDto {
   @Expose()
   contactAddress: string | null;
 
+  @ApiProperty({ example: 0.075, description: 'VAT rate fraction (0.075 = 7.5%)' })
+  @Expose()
+  taxRate: number;
+
+  @ApiProperty({ example: 0.1, description: 'Points earned per ₦1 spent' })
+  @Expose()
+  pointsPerNaira: number;
+
+  @ApiProperty({ example: 0.1, description: 'Naira value of 1 redeemed point' })
+  @Expose()
+  nairaPerPoint: number;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)
@@ -396,9 +408,19 @@ export class StorefrontConfigResponseDto {
   @Type(() => Date)
   updatedAt: Date;
 
-  static from(entity: StorefrontConfigEntity): StorefrontConfigResponseDto {
-    return plainToInstance(StorefrontConfigResponseDto, entity, {
-      excludeExtraneousValues: true,
-    });
+  static from(
+    entity: StorefrontConfigEntity,
+    extras: { taxRate?: number; pointsPerNaira?: number; nairaPerPoint?: number } = {},
+  ): StorefrontConfigResponseDto {
+    return plainToInstance(
+      StorefrontConfigResponseDto,
+      {
+        ...entity,
+        taxRate: Number(extras.taxRate ?? 0),
+        pointsPerNaira: Number(extras.pointsPerNaira ?? 0),
+        nairaPerPoint: Number(extras.nairaPerPoint ?? 0),
+      },
+      { excludeExtraneousValues: true },
+    );
   }
 }
