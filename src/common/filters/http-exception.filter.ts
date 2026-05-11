@@ -24,10 +24,18 @@ export class HttpExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const res = exception.getResponse();
-      message =
-        typeof res === 'string'
-          ? res
-          : ((res as Record<string, unknown>).message as string) ?? message;
+      if (typeof res === 'string') {
+        message = res;
+      } else {
+        // ValidationPipe returns `message: string | string[]` — join arrays so
+        // the client sees the actual reason instead of "[object Object]".
+        const raw = (res as Record<string, unknown>).message;
+        if (Array.isArray(raw)) {
+          message = raw.join('; ');
+        } else if (typeof raw === 'string') {
+          message = raw;
+        }
+      }
     } else if (exception instanceof QueryFailedError) {
       const err = exception as QueryFailedError & { code?: string };
       if (err.code === '23505') {

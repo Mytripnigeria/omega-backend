@@ -3,6 +3,7 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -36,10 +37,23 @@ export interface UploadOptions {
 }
 
 @Injectable()
-export class StorageService {
+export class StorageService implements OnModuleInit {
   private readonly logger = new Logger(StorageService.name);
   private readonly client: S3Client;
   private readonly config: S3Config;
+
+  onModuleInit(): void {
+    const missing: string[] = [];
+    if (!this.config.bucket) missing.push('S3_BUCKET');
+    if (!this.config.accessKeyId) missing.push('S3_ACCESS_KEY_ID');
+    if (!this.config.secretAccessKey) missing.push('S3_SECRET_ACCESS_KEY');
+    if (!this.config.publicUrlBase) missing.push('S3_PUBLIC_URL_BASE');
+    if (missing.length > 0) {
+      this.logger.warn(
+        `Storage is NOT configured — uploads will fail. Missing env: ${missing.join(', ')}`,
+      );
+    }
+  }
 
   constructor(
     private readonly configService: ConfigService,
@@ -74,10 +88,19 @@ export class StorageService {
     options: UploadOptions = {},
   ): Promise<FileEntity> {
     if (!this.config.bucket) {
-      throw new InternalServerErrorException('Storage bucket is not configured');
+      throw new InternalServerErrorException(
+        'Storage is not configured: missing S3_BUCKET. Ask your admin to set the S3/R2 env vars.',
+      );
     }
     if (!this.config.publicUrlBase) {
-      throw new InternalServerErrorException('S3_PUBLIC_URL_BASE is not configured');
+      throw new InternalServerErrorException(
+        'Storage is not configured: missing S3_PUBLIC_URL_BASE.',
+      );
+    }
+    if (!this.config.accessKeyId || !this.config.secretAccessKey) {
+      throw new InternalServerErrorException(
+        'Storage credentials are missing (S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY). Uploads disabled until configured.',
+      );
     }
 
     const folder = (options.folder ?? 'misc').replace(/^\/+|\/+$/g, '');
