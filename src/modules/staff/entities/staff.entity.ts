@@ -57,7 +57,7 @@ export class StaffEntity {
   @Column()
   roleId: string;
 
-  @ManyToOne(() => RoleEntity, { onDelete: 'RESTRICT', eager: false })
+  @ManyToOne(() => RoleEntity, (role) => role.staff, { onDelete: 'RESTRICT', eager: false })
   @JoinColumn({ name: 'roleId' })
   role: RoleEntity;
 

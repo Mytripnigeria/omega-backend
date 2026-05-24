@@ -169,15 +169,18 @@ export class FinancialTransactionsService {
     if (filter.dateTo)
       baseQb.andWhere('t.createdAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
 
+    // Use parameter names that don't collide with the base query's `:dt`
+    // (dateTo) / `:df` (dateFrom). Reusing `:dt` for the debit type overwrote
+    // the dateTo bind → `t.createdAt <= 'debit'` → 500 whenever dateTo was set.
     const credits = await baseQb
       .clone()
       .select('COALESCE(SUM(t.amount), 0)', 'total')
-      .andWhere('t.type = :ct', { ct: 'credit' })
+      .andWhere('t.type = :creditType', { creditType: 'credit' })
       .getRawOne<{ total: string }>();
     const debits = await baseQb
       .clone()
       .select('COALESCE(SUM(t.amount), 0)', 'total')
-      .andWhere('t.type = :dt', { dt: 'debit' })
+      .andWhere('t.type = :debitType', { debitType: 'debit' })
       .getRawOne<{ total: string }>();
 
     const byMethodRaw = await baseQb

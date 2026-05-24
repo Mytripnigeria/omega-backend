@@ -4,11 +4,13 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { StoreEntity } from '../../store/entities/store.entity';
+import { StaffEntity } from '../../staff/entities/staff.entity';
 
 @Entity('roles')
 export class RoleEntity {
@@ -23,6 +25,9 @@ export class RoleEntity {
   @ManyToOne(() => StoreEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'storeId' })
   store: StoreEntity;
+
+  @OneToMany(() => StaffEntity, (staff) => staff.role)
+  staff: StaffEntity[];
 
   @ApiProperty({ example: 'Cashier' })
   @Column()
