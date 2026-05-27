@@ -40,6 +40,8 @@ import { CustomersModule } from './modules/customers/customers.module';
 import { InventoryLocationsModule } from './modules/inventory-locations/inventory-locations.module';
 import { StockTransfersModule } from './modules/stock-transfers/stock-transfers.module';
 import { EquipmentModule } from './modules/equipment/equipment.module';
+import { TablesModule } from './modules/tables/tables.module';
+import { PushNotificationsModule } from './modules/push-notifications/push-notifications.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { BookingsModule } from './modules/bookings/bookings.module';
 import { StorefrontModule } from './modules/storefront/storefront.module';
@@ -112,6 +114,8 @@ import { PayoutsModule } from './modules/payouts/payouts.module';
     InventoryLocationsModule,
     StockTransfersModule,
     EquipmentModule,
+    TablesModule,
+    PushNotificationsModule,
     SuppliersModule,
     BookingsModule,
     StorefrontModule,

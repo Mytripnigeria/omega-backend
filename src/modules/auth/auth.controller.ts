@@ -23,6 +23,7 @@ import { StaffPinLoginDto } from './dto/staff-pin-login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { Disable2FADto, Verify2FADto } from './dto/two-factor.dto';
+import { RequestPhoneOtpDto, VerifyPhoneOtpDto } from './dto/phone-auth.dto';
 import {
   StorefrontLoginDto,
   StorefrontRegisterDto,
@@ -204,6 +205,28 @@ export class AuthController {
   @Post('storefront/refresh')
   storefrontRefresh(@Body() dto: RefreshTokenDto) {
     return this.authService.storefrontRefresh(dto);
+  }
+
+  @ApiOperation({
+    summary: 'Request a phone OTP',
+    description:
+      'Generates a 6-digit code and sends it to the supplied phone via SMS. Rate-limited per phone (1/30s, 5/hour).',
+  })
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  @Post('storefront/phone/request-otp')
+  requestPhoneOtp(@Body() dto: RequestPhoneOtpDto) {
+    return this.authService.requestPhoneOtp(dto);
+  }
+
+  @ApiOperation({
+    summary: 'Verify a phone OTP',
+    description:
+      'Verifies the code and issues storefront tokens. Creates a customer record (and surrogate user) on first sign-in — `firstName`+`lastName` are required for new customers.',
+  })
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  @Post('storefront/phone/verify')
+  verifyPhoneOtp(@Body() dto: VerifyPhoneOtpDto) {
+    return this.authService.verifyPhoneOtp(dto);
   }
 
   @ApiOperation({ summary: 'Storefront logout' })

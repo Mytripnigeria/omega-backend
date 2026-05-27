@@ -70,6 +70,32 @@ export class IngredientsService {
     return ingredient;
   }
 
+  /**
+   * Returns ingredients whose `expiryDate` is on or before `today + days`,
+   * sorted by soonest expiry. Excludes ingredients with no expiry recorded.
+   * The workstation Inventory Alerts card reads this to flag batches that
+   * need attention before they spoil.
+   */
+  async findExpiring(
+    storeId: string | undefined,
+    days: number,
+  ): Promise<IngredientResponseDto[]> {
+    const horizon = new Date();
+    horizon.setDate(horizon.getDate() + days);
+    // 'date' columns compare as ISO date strings in Postgres — emit YYYY-MM-DD.
+    const horizonIso = horizon.toISOString().slice(0, 10);
+
+    const qb = this.ingredientRepo
+      .createQueryBuilder('i')
+      .where('i.expiryDate IS NOT NULL')
+      .andWhere('i.expiryDate <= :horizon', { horizon: horizonIso })
+      .orderBy('i.expiryDate', 'ASC');
+    if (storeId) qb.andWhere('i.storeId = :storeId', { storeId });
+
+    const rows = await qb.getMany();
+    return rows.map(IngredientResponseDto.from);
+  }
+
   async getStats(storeId?: string) {
     const where: FindOptionsWhere<IngredientEntity> = {};
     if (storeId) where.storeId = storeId;
@@ -124,6 +150,12 @@ export class IngredientsService {
       const next = previous + dto.adjustment;
       ingredient.currentStock = next;
       if (dto.adjustment > 0) ingredient.lastRestocked = new Date();
+      // Receiving new stock can refresh the best-before date for the batch.
+      // We intentionally only honour expiryDate on intake (positive adjustment)
+      // to avoid silently rewriting expiry from waste/correction flows.
+      if (dto.adjustment > 0 && dto.expiryDate) {
+        ingredient.expiryDate = dto.expiryDate;
+      }
       const after = await repo.save(ingredient);
 
       const movementType =

@@ -90,7 +90,20 @@ export class CreateOrderDto {
   @IsString()
   customerPhone?: string;
 
-  @ApiPropertyOptional({ example: 'T-12' })
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'TableEntity id when opening an order against a managed table. The backend snapshots the table\'s name into `tableNumber` and marks the table as occupied.',
+  })
+  @IsOptional()
+  @IsString()
+  tableId?: string;
+
+  @ApiPropertyOptional({
+    example: 'T-12',
+    description:
+      'Free-text table label (kiosks or shops without table management). Ignored when `tableId` is provided.',
+  })
   @IsOptional()
   @IsString()
   tableNumber?: string;

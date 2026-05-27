@@ -81,13 +81,38 @@ export class EquipmentEntity {
   @Column({ type: 'enum', enum: EquipmentStatus, default: EquipmentStatus.OPERATIONAL })
   status: EquipmentStatus;
 
-  @ApiPropertyOptional({ example: -18.5, nullable: true })
+  @ApiPropertyOptional({ example: -18.5, nullable: true, description: 'Latest recorded temperature (denormalized from EquipmentTemperatureReadingEntity).' })
   @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
   currentTemperature: number | null;
 
-  @ApiPropertyOptional({ example: -20, nullable: true })
+  @ApiPropertyOptional({ example: -20, nullable: true, description: 'Setpoint / desired temperature' })
   @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
   targetTemperature: number | null;
+
+  @ApiPropertyOptional({
+    example: -22,
+    nullable: true,
+    description: 'Lower bound of the safe-temperature range. Readings below this trigger alerts.',
+  })
+  @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
+  minTempC: number | null;
+
+  @ApiPropertyOptional({
+    example: -15,
+    nullable: true,
+    description: 'Upper bound of the safe-temperature range. Readings above this trigger alerts.',
+  })
+  @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
+  maxTempC: number | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description: 'Timestamp of the most recent temperature reading.',
+  })
+  @Column({ type: 'timestamptz', nullable: true })
+  lastReadingAt: Date | null;
 
   @ApiPropertyOptional({ example: '2026-04-01', nullable: true })
   @Column({ type: 'date', nullable: true })

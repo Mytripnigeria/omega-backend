@@ -66,7 +66,21 @@ export class OrderEntity {
   @Column({ type: 'varchar', nullable: true })
   customerPhone: string | null;
 
-  @ApiPropertyOptional({ example: 'T-12', nullable: true, description: 'Table number for dine-in orders' })
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description: 'TableEntity id (when the order is opened against a managed table).',
+  })
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  tableId: string | null;
+
+  @ApiPropertyOptional({
+    example: 'T-12',
+    nullable: true,
+    description:
+      'Denormalised table label at order time. Snapshotted from the table for receipts/reports so renaming a table later does not retroactively change historical orders.',
+  })
   @Column({ type: 'varchar', nullable: true })
   tableNumber: string | null;
 

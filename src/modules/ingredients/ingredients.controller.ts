@@ -136,6 +136,27 @@ export class IngredientsController {
     return this.ingredientsService.listMovements(actorFrom(req), filter);
   }
 
+  @ApiOperation({
+    summary: 'List ingredients expiring soon',
+    description:
+      'Returns ingredients whose best-before / use-by date is within the next N days (default 14). Excludes ingredients without a recorded expiry. Powers the Inventory Alerts "Expiring Soon" card.',
+  })
+  @ApiQuery({ name: 'storeId', required: false, format: 'uuid' })
+  @ApiQuery({ name: 'days', required: false, example: 14, description: 'Look-ahead window in days (1-90).' })
+  @ApiOkResponse({ type: [IngredientResponseDto] })
+  @UseGuards(JwtOrStaffGuard)
+  @Get('expiring')
+  findExpiring(
+    @Query('storeId') storeId?: string,
+    @Query('days') days?: string,
+  ) {
+    const parsed = days ? Number.parseInt(days, 10) : 14;
+    const window = Number.isFinite(parsed)
+      ? Math.min(90, Math.max(1, parsed))
+      : 14;
+    return this.ingredientsService.findExpiring(storeId, window);
+  }
+
   @ApiOperation({ summary: 'Get a single ingredient' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: IngredientResponseDto })

@@ -1,11 +1,17 @@
 import {
+  BadRequestException,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { AdminService } from '../admin/admin.service';
 import { StaffService } from '../staff/staff.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
@@ -22,14 +28,56 @@ import {
   StorefrontRegisterDto,
 } from './dto/storefront-register.dto';
 import {
+  RequestPhoneOtpDto,
+  VerifyPhoneOtpDto,
+} from './dto/phone-auth.dto';
+import { PhoneOtpEntity } from './entities/phone-otp.entity';
+import { SmsService } from './sms/sms.service';
+import {
   AdminJwtPayload,
   StaffJwtPayload,
   UserJwtPayload,
 } from '../../common/types/jwt-payload.types';
 import { ConflictException } from '@nestjs/common';
 
+const OTP_TTL_SECONDS = 5 * 60;
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_RESEND_COOLDOWN_SECONDS = 30;
+const OTP_HOURLY_LIMIT = 5;
+
+/**
+ * Normalises an end-user-typed phone number to E.164. Accepts already-E.164
+ * inputs, NG-local `0XXX...`, and bare digit strings (treated as NG by default).
+ * Returns `null` if the input can't reasonably be interpreted as a phone.
+ */
+function normalisePhoneE164(raw: string, defaultRegion = 'NG'): string | null {
+  if (!raw) return null;
+  const trimmed = raw.replace(/[\s\-()]/g, '');
+  if (!trimmed) return null;
+  if (trimmed.startsWith('+')) {
+    const digits = trimmed.slice(1).replace(/\D/g, '');
+    return digits.length >= 8 && digits.length <= 15 ? `+${digits}` : null;
+  }
+  const digits = trimmed.replace(/\D/g, '');
+  if (!digits) return null;
+  if (defaultRegion === 'NG') {
+    if (digits.startsWith('234')) return digits.length >= 11 && digits.length <= 15 ? `+${digits}` : null;
+    if (digits.startsWith('0') && digits.length === 11) return `+234${digits.slice(1)}`;
+    if (digits.length === 10) return `+234${digits}`;
+  }
+  // Fallback: treat as already-international digits.
+  if (digits.length >= 8 && digits.length <= 15) return `+${digits}`;
+  return null;
+}
+
+function sha256(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly adminService: AdminService,
     private readonly staffService: StaffService,
@@ -39,6 +87,10 @@ export class AuthService {
     private readonly customersService: CustomersService,
     private readonly usersService: UsersService,
     private readonly referralsService: ReferralsService,
+    @InjectRepository(PhoneOtpEntity)
+    private readonly phoneOtpRepo: Repository<PhoneOtpEntity>,
+    @Inject(SmsService)
+    private readonly smsService: SmsService,
   ) {}
 
   async adminLogin(dto: AdminLoginDto) {
@@ -373,5 +425,157 @@ export class AuthService {
         customerId,
       },
     };
+  }
+
+  // ─── Phone OTP ─────────────────────────────────────────────────────────
+
+  /**
+   * Generates and sends a one-time code to the supplied phone. Rate-limited
+   * per phone to prevent abuse:
+   *  • at most 1 request every {@link OTP_RESEND_COOLDOWN_SECONDS}
+   *  • at most {@link OTP_HOURLY_LIMIT} requests per rolling hour
+   *
+   * The caller always gets a uniform success response — we don't leak whether
+   * a customer record exists for the number to avoid phone enumeration.
+   */
+  async requestPhoneOtp(dto: RequestPhoneOtpDto): Promise<{ ok: true; phone: string }> {
+    const phone = normalisePhoneE164(dto.phone);
+    if (!phone) throw new BadRequestException('Invalid phone number');
+
+    const now = new Date();
+    const cooldownStart = new Date(now.getTime() - OTP_RESEND_COOLDOWN_SECONDS * 1000);
+    const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+
+    const [recent, hourlyCount] = await Promise.all([
+      this.phoneOtpRepo.findOne({
+        where: { phone, businessId: dto.businessId, consumed: false },
+        order: { createdAt: 'DESC' },
+      }),
+      this.phoneOtpRepo
+        .createQueryBuilder('o')
+        .where('o.phone = :p AND o.businessId = :b', { p: phone, b: dto.businessId })
+        .andWhere('o.createdAt >= :since', { since: hourAgo })
+        .getCount(),
+    ]);
+
+    if (recent && recent.createdAt > cooldownStart) {
+      throw new BadRequestException(
+        'Please wait a moment before requesting another code.',
+      );
+    }
+    if (hourlyCount >= OTP_HOURLY_LIMIT) {
+      throw new BadRequestException(
+        'Too many code requests. Try again later.',
+      );
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const otp = this.phoneOtpRepo.create({
+      phone,
+      businessId: dto.businessId,
+      codeHash: sha256(code),
+      purpose: dto.purpose ?? 'login',
+      expiresAt: new Date(now.getTime() + OTP_TTL_SECONDS * 1000),
+      attempts: 0,
+      consumed: false,
+    });
+    await this.phoneOtpRepo.save(otp);
+
+    const delivered = await this.smsService.send(
+      phone,
+      `Your verification code is ${code}. It expires in 5 minutes.`,
+    );
+    if (!delivered) {
+      // Don't expose delivery failure to the caller — log for ops. The next
+      // request_otp call (after cooldown) will retry naturally.
+      this.logger.warn(`OTP delivery failed for ${phone} (otp row ${otp.id})`);
+    }
+    return { ok: true, phone };
+  }
+
+  /**
+   * Verifies a previously-sent code and issues storefront tokens. Side
+   * effects: find-or-create the customer record (so phone-only signups work
+   * end-to-end), find-or-create a synthetic UserEntity bound to the customer
+   * for refresh-token tracking, and record a successful login.
+   */
+  async verifyPhoneOtp(dto: VerifyPhoneOtpDto) {
+    const phone = normalisePhoneE164(dto.phone);
+    if (!phone) throw new BadRequestException('Invalid phone number');
+
+    const now = new Date();
+    const otp = await this.phoneOtpRepo.findOne({
+      where: { phone, businessId: dto.businessId, consumed: false },
+      order: { createdAt: 'DESC' },
+    });
+    if (!otp) {
+      throw new UnauthorizedException('No active code for this number');
+    }
+    if (otp.expiresAt < now) {
+      throw new UnauthorizedException('Code has expired — request a new one');
+    }
+    if (otp.attempts >= OTP_MAX_ATTEMPTS) {
+      throw new UnauthorizedException('Too many attempts — request a new code');
+    }
+
+    otp.attempts += 1;
+    if (otp.codeHash !== sha256(dto.code)) {
+      await this.phoneOtpRepo.save(otp);
+      throw new UnauthorizedException('Invalid code');
+    }
+    otp.consumed = true;
+    await this.phoneOtpRepo.save(otp);
+
+    // Find or create the customer.
+    let customer = await this.customersService.findByEmailOrPhone(
+      dto.businessId,
+      undefined,
+      phone,
+    );
+    if (!customer) {
+      if (!dto.firstName || !dto.lastName) {
+        throw new BadRequestException(
+          "First and last name are required for first-time phone sign-up.",
+        );
+      }
+      customer = await this.customersService.createInternal(dto.businessId, {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        phone,
+        source: CustomerSource.STOREFRONT,
+      });
+      if (dto.referredByCode) {
+        try {
+          await this.referralsService.recordSignUp(
+            dto.businessId,
+            customer.id,
+            dto.referredByCode,
+          );
+        } catch {
+          // Bad referral code shouldn't block sign-up.
+        }
+      }
+    }
+
+    // Find or create the surrogate UserEntity. We use a synthetic email so the
+    // existing email-keyed user store can host phone-only accounts without a
+    // schema change. The synthetic email is never shown to end users; if they
+    // later add a real email through the storefront-register flow, that row
+    // will be created separately and the customer can be linked by phone.
+    let user = await this.usersService.findByCustomerId(customer.id);
+    if (!user) {
+      const syntheticEmail = `phone+${phone.slice(1)}@phone.users.local`;
+      const randomPassword = crypto.randomBytes(32).toString('hex');
+      const saltRounds = this.configService.get<number>('bcryptSaltRounds') ?? 10;
+      user = await this.usersService.create({
+        businessId: dto.businessId,
+        customerId: customer.id,
+        email: syntheticEmail,
+        password: await bcrypt.hash(randomPassword, saltRounds),
+      });
+    }
+
+    await this.usersService.recordLogin(user.id);
+    return this.issueUserTokens(user.id, user.email, user.businessId, user.customerId);
   }
 }

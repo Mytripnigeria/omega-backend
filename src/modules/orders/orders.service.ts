@@ -37,6 +37,8 @@ import { PaystackService } from '../paystack/paystack.service';
 import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
 import { TransactionMethod } from '../financial-transactions/entities/financial-transaction.entity';
 import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.service';
+import { TableEntity, TableStatus } from '../tables/entities/table.entity';
+import { PushService } from '../push-notifications/push.service';
 
 const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PENDING]: [OrderStatus.PREPARING, OrderStatus.CANCELLED],
@@ -66,6 +68,8 @@ export class OrdersService {
     private readonly itemRepo: Repository<OrderItemEntity>,
     @InjectRepository(OrderStatusEventEntity)
     private readonly eventRepo: Repository<OrderStatusEventEntity>,
+    @InjectRepository(TableEntity)
+    private readonly tableRepo: Repository<TableEntity>,
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
     private readonly customersService: CustomersService,
@@ -73,7 +77,72 @@ export class OrdersService {
     private readonly coupons: CouponsService,
     private readonly paystack: PaystackService,
     private readonly merchantWallet: MerchantWalletService,
+    private readonly pushService: PushService,
   ) {}
+
+  /**
+   * Best-effort customer push notification on order status changes. Never
+   * throws — push failures don't interrupt the order flow.
+   */
+  private async sendOrderStatusPush(
+    order: OrderEntity,
+    status: OrderStatus,
+  ): Promise<void> {
+    if (!order.customerId) return;
+    const messages: Partial<Record<OrderStatus, { title: string; body: string }>> = {
+      [OrderStatus.PREPARING]: {
+        title: `Order #${order.orderNumber} confirmed`,
+        body: "We're preparing your order now.",
+      },
+      [OrderStatus.READY]: {
+        title: `Order #${order.orderNumber} is ready`,
+        body: order.isDelivery
+          ? 'A rider has been dispatched.'
+          : "Come collect it whenever you're ready.",
+      },
+      [OrderStatus.SERVED]: {
+        title: `Order #${order.orderNumber} delivered`,
+        body: 'Enjoy your meal!',
+      },
+      [OrderStatus.COMPLETED]: {
+        title: `Order #${order.orderNumber} completed`,
+        body: 'Thanks for ordering — see you next time!',
+      },
+      [OrderStatus.CANCELLED]: {
+        title: `Order #${order.orderNumber} cancelled`,
+        body: 'Your order was cancelled. Any pre-payment will be refunded.',
+      },
+    };
+    const msg = messages[status];
+    if (!msg) return;
+    try {
+      await this.pushService.sendToCustomer(order.customerId, {
+        title: msg.title,
+        body: msg.body,
+        url: `/order-tracking/${order.id}`,
+        data: { orderId: order.id, status },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Push notification skipped for order ${order.id}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Releases the table attached to an order back to `available` when the order
+   * reaches a terminal state. No-op if the table was already moved on (e.g.
+   * staff manually set it to `cleaning`).
+   */
+  private async releaseTableIfAttached(
+    tableId: string | null | undefined,
+  ): Promise<void> {
+    if (!tableId) return;
+    await this.tableRepo.update(
+      { id: tableId, status: TableStatus.OCCUPIED },
+      { status: TableStatus.AVAILABLE },
+    );
+  }
 
   private mapPaymentChannelToMethod(
     ch: OrderEntity['paymentChannel'] | null | undefined,
@@ -112,6 +181,20 @@ export class OrdersService {
       throw new BadRequestException('Order requires a store context');
     }
 
+    // If the order is being opened against a managed table, look it up and
+    // snapshot the label so receipts/reports survive a future rename or
+    // delete of the table.
+    let tableId: string | null = null;
+    let tableNumber: string | null = dto.tableNumber ?? null;
+    if (dto.tableId) {
+      const table = await this.tableRepo.findOne({ where: { id: dto.tableId } });
+      if (!table || table.businessId !== actor.businessId) {
+        throw new NotFoundException(`Table ${dto.tableId} not found`);
+      }
+      tableId = table.id;
+      tableNumber = table.name;
+    }
+
     const subtotal = dto.items.reduce(
       (sum, i) => sum + Number(i.unitPrice) * i.quantity,
       0,
@@ -132,7 +215,8 @@ export class OrdersService {
         customerId: dto.customerId ?? null,
         customerName: dto.customerName ?? null,
         customerPhone: dto.customerPhone ?? null,
-        tableNumber: dto.tableNumber ?? null,
+        tableId,
+        tableNumber,
         channel: dto.channel ?? 'pos',
         isDelivery: dto.isDelivery ?? false,
         status: OrderStatus.PENDING,
@@ -172,6 +256,15 @@ export class OrdersService {
 
       return persisted;
     });
+
+    // Mark the seated table as occupied after the order persists. Done outside
+    // the transaction so a table-write race can't roll back the order.
+    if (tableId) {
+      await this.tableRepo.update(
+        { id: tableId, status: TableStatus.AVAILABLE },
+        { status: TableStatus.OCCUPIED },
+      );
+    }
 
     this.activityLog.record({
       actorType: actor.sub_type,
@@ -321,6 +414,14 @@ export class OrdersService {
       );
     });
 
+    // Free the seated table when the order reaches a terminal state.
+    if (dto.status === OrderStatus.COMPLETED || dto.status === OrderStatus.CANCELLED) {
+      await this.releaseTableIfAttached(order.tableId);
+    }
+
+    // Best-effort customer push on every status change.
+    await this.sendOrderStatusPush(order, dto.status);
+
     this.activityLog.record({
       actorType: actor.sub_type,
       actorId: actor.sub,
@@ -375,6 +476,11 @@ export class OrdersService {
         }),
       );
     });
+
+    // Free the seated table now that the order is cancelled.
+    await this.releaseTableIfAttached(order.tableId);
+
+    await this.sendOrderStatusPush(order, OrderStatus.CANCELLED);
 
     this.activityLog.record({
       actorType: actor.sub_type,
@@ -624,6 +730,12 @@ export class OrdersService {
         }
       }
     });
+
+    // If the payment closed out the order (SERVED → COMPLETED above), free
+    // the seated table back to `available`.
+    if (order.status === OrderStatus.COMPLETED) {
+      await this.releaseTableIfAttached(order.tableId);
+    }
 
     this.activityLog.record({
       actorType: actor.sub_type,

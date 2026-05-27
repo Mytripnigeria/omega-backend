@@ -52,6 +52,14 @@ export class IngredientEntity {
   @Column({ nullable: true, type: 'timestamp' })
   lastRestocked: Date;
 
+  @ApiPropertyOptional({
+    example: '2026-06-12',
+    nullable: true,
+    description: 'Best-before / use-by date for the current stock batch. Refreshed when new stock is received via adjust-stock.',
+  })
+  @Column({ type: 'date', nullable: true })
+  expiryDate: string | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn()
   createdAt: Date;

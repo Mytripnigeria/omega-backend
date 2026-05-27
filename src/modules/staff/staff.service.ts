@@ -18,6 +18,11 @@ import {
   StaffDocumentResponseDto,
 } from './dto/staff-response.dto';
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
+import {
+  StaffPreferencesDto,
+  UpdateStaffPreferencesDto,
+  mergeStaffPreferences,
+} from './dto/preferences.dto';
 
 @Injectable()
 export class StaffService {
@@ -166,5 +171,36 @@ export class StaffService {
     ]);
 
     return { total, active, onLeave, inactive, terminated };
+  }
+
+  // ─── Per-staff preferences ──────────────────────────────────────────────
+
+  /**
+   * Returns the staff member's preferences merged with defaults. Used by the
+   * workstation Settings page; the merger drops any keys not in the
+   * whitelist so we don't leak stale-shape data to clients.
+   */
+  async getPreferences(staffId: string): Promise<StaffPreferencesDto> {
+    const staff = await this.staffRepo.findOne({
+      where: { id: staffId },
+      select: ['id', 'preferences'],
+    });
+    if (!staff) throw new NotFoundException('Staff not found');
+    return mergeStaffPreferences(staff.preferences);
+  }
+
+  async updatePreferences(
+    staffId: string,
+    patch: UpdateStaffPreferencesDto,
+  ): Promise<StaffPreferencesDto> {
+    const staff = await this.staffRepo.findOne({
+      where: { id: staffId },
+      select: ['id', 'preferences'],
+    });
+    if (!staff) throw new NotFoundException('Staff not found');
+    const merged = mergeStaffPreferences({ ...(staff.preferences ?? {}), ...patch });
+    staff.preferences = { ...merged };
+    await this.staffRepo.save(staff);
+    return merged;
   }
 }

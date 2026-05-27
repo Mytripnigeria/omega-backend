@@ -44,6 +44,10 @@ export class IngredientResponseDto {
   @Type(() => Date)
   lastRestocked: Date | null;
 
+  @ApiPropertyOptional({ example: '2026-06-12', nullable: true, description: 'Best-before / use-by date for the current batch' })
+  @Expose()
+  expiryDate: string | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)

@@ -43,4 +43,12 @@ export class CreateIngredientDto {
   @IsOptional()
   @IsDateString()
   lastRestocked?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-06-12',
+    description: 'Best-before / use-by date for the current batch (ISO 8601 date)',
+  })
+  @IsOptional()
+  @IsDateString()
+  expiryDate?: string;
 }

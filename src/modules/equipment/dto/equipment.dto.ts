@@ -77,15 +77,25 @@ export class CreateEquipmentDto {
   @IsEnum(EquipmentStatus)
   status?: EquipmentStatus;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Last-known temperature (Celsius). Usually written via the temperature-readings endpoint, not directly.' })
   @IsOptional()
   @IsNumber()
   currentTemperature?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Setpoint / desired temperature (Celsius)' })
   @IsOptional()
   @IsNumber()
   targetTemperature?: number;
+
+  @ApiPropertyOptional({ example: -22, description: 'Lower bound for safe range (Celsius). Readings below trigger out-of-range.' })
+  @IsOptional()
+  @IsNumber()
+  minTempC?: number;
+
+  @ApiPropertyOptional({ example: -15, description: 'Upper bound for safe range (Celsius). Readings above trigger out-of-range.' })
+  @IsOptional()
+  @IsNumber()
+  maxTempC?: number;
 
   @ApiPropertyOptional({ example: '2026-04-01' })
   @IsOptional()

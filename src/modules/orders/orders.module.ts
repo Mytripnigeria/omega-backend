@@ -28,6 +28,8 @@ import { ReferralsModule } from '../referrals/referrals.module';
 import { BusinessModule } from '../business/business.module';
 import { ComboEntity } from '../combos/entities/combo.entity';
 import { ProductVariationEntity } from '../products/entities/product-variation.entity';
+import { TableEntity } from '../tables/entities/table.entity';
+import { PushNotificationsModule } from '../push-notifications/push-notifications.module';
 
 @Module({
   imports: [
@@ -44,6 +46,7 @@ import { ProductVariationEntity } from '../products/entities/product-variation.e
       CustomerEntity,
       WalletTransactionEntity,
       PointsTransactionEntity,
+      TableEntity,
     ]),
     ActivityLogModule,
     CustomersModule,
@@ -52,6 +55,7 @@ import { ProductVariationEntity } from '../products/entities/product-variation.e
     ReferralsModule,
     BusinessModule,
     PaystackModule,
+    PushNotificationsModule,
   ],
   controllers: [
     OrdersController,

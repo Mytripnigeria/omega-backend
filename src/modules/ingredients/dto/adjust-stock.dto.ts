@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsNumber, IsOptional, IsString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class AdjustStockDto {
@@ -10,4 +10,13 @@ export class AdjustStockDto {
   @IsOptional()
   @IsString()
   reason?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-06-12',
+    description:
+      'New best-before / use-by date for the current batch (ISO 8601 date). Typically set when receiving new stock; only honoured on positive `adjustment` (intake).',
+  })
+  @IsOptional()
+  @IsDateString()
+  expiryDate?: string;
 }

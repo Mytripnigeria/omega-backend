@@ -141,6 +141,17 @@ export class StaffEntity {
   @Column({ nullable: true, select: false })
   pin: string;
 
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: true,
+    nullable: true,
+    description:
+      "Per-staff client preferences (e.g. POS beep, theme). Free-form JSON, validated against UpdateStaffPreferencesDto's whitelist on write.",
+    example: { beepEnabled: true, theme: 'system', notificationsEnabled: true },
+  })
+  @Column({ type: 'jsonb', nullable: true })
+  preferences!: Record<string, unknown> | null;
+
   @OneToMany(() => StaffDocumentEntity, (doc) => doc.staff, { cascade: true })
   documents: StaffDocumentEntity[];
 

@@ -73,6 +73,19 @@ export class EquipmentResponseDto {
 
   @ApiPropertyOptional({ nullable: true })
   @Expose()
+  minTempC: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
+  maxTempC: number | null;
+
+  @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
+  @Expose()
+  @Type(() => Date)
+  lastReadingAt: Date | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
   lastMaintenanceDate: string | null;
 
   @ApiPropertyOptional({ nullable: true })
@@ -116,6 +129,8 @@ export class EquipmentResponseDto {
           entity.targetTemperature == null
             ? null
             : Number(entity.targetTemperature),
+        minTempC: entity.minTempC == null ? null : Number(entity.minTempC),
+        maxTempC: entity.maxTempC == null ? null : Number(entity.maxTempC),
         uptime: entity.uptime == null ? null : Number(entity.uptime),
       },
       { excludeExtraneousValues: true },

@@ -28,20 +28,25 @@ import { UpdateProductDto, UpdateVariationDto, ToggleProductStatusDto } from './
 import { FilterProductDto } from './dto/filter-product.dto';
 import { LinkIngredientDto } from './dto/link-ingredient.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { JwtOrStaffGuard } from '../../common/guards/jwt-or-staff.guard';
 import {
   ProductResponseDto,
   ProductVariationResponseDto,
 } from './dto/product-response.dto';
 
+// Reads (`GET`) accept either admin or staff JWTs so the workstation POS can
+// load the live menu. Each write method below adds `JwtAuthGuard` to require
+// an admin JWT (the per-method guard stacks with the class-level one).
 @ApiTags('products')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtOrStaffGuard)
 @Controller('products')
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @ApiOperation({ summary: 'Create a product', description: 'Admin-only. Creates a new menu/inventory product.' })
   @ApiCreatedResponse({ type: ProductResponseDto })
+  @UseGuards(JwtAuthGuard)
   @Post()
   create(@Body() dto: CreateProductDto) {
     return this.productsService.create(dto);
@@ -93,6 +98,7 @@ export class ProductsController {
   @ApiOperation({ summary: 'Update a product', description: 'Admin-only. Partial update.' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: ProductResponseDto })
+  @UseGuards(JwtAuthGuard)
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateProductDto) {
     return this.productsService.update(id, dto);
@@ -101,6 +107,7 @@ export class ProductsController {
   @ApiOperation({ summary: 'Soft-delete a product', description: 'Admin-only.' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiNoContentResponse()
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id') id: string) {
@@ -110,6 +117,7 @@ export class ProductsController {
   @ApiOperation({ summary: 'Toggle product availability', description: 'Admin-only. Toggles the `status` (active/inactive) flag.' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: ProductResponseDto })
+  @UseGuards(JwtAuthGuard)
   @Patch(':id/status')
   toggleStatus(@Param('id') id: string, @Body() dto: ToggleProductStatusDto) {
     return this.productsService.toggleStatus(id, dto);
@@ -118,6 +126,7 @@ export class ProductsController {
   @ApiOperation({ summary: 'Add a variation', description: 'Admin-only. Adds a size/flavour variation to a product.' })
   @ApiParam({ name: 'id', format: 'uuid', description: 'Product ID' })
   @ApiCreatedResponse({ type: ProductVariationResponseDto })
+  @UseGuards(JwtAuthGuard)
   @Post(':id/variations')
   addVariation(@Param('id') id: string, @Body() dto: CreateVariationDto) {
     return this.productsService.addVariation(id, dto);
@@ -127,6 +136,7 @@ export class ProductsController {
   @ApiParam({ name: 'id', format: 'uuid', description: 'Product ID' })
   @ApiParam({ name: 'varId', format: 'uuid', description: 'Variation ID' })
   @ApiOkResponse({ type: ProductVariationResponseDto })
+  @UseGuards(JwtAuthGuard)
   @Patch(':id/variations/:varId')
   updateVariation(
     @Param('id') id: string,
@@ -140,6 +150,7 @@ export class ProductsController {
   @ApiParam({ name: 'id', format: 'uuid', description: 'Product ID' })
   @ApiParam({ name: 'varId', format: 'uuid', description: 'Variation ID' })
   @ApiNoContentResponse()
+  @UseGuards(JwtAuthGuard)
   @Delete(':id/variations/:varId')
   @HttpCode(HttpStatus.NO_CONTENT)
   removeVariation(@Param('id') id: string, @Param('varId') varId: string) {
@@ -149,6 +160,7 @@ export class ProductsController {
   @ApiOperation({ summary: 'Link an ingredient', description: 'Admin-only. Associates an ingredient (with quantity) to this product for stock tracking.' })
   @ApiParam({ name: 'id', format: 'uuid', description: 'Product ID' })
   @ApiCreatedResponse({ description: 'Ingredient linked.' })
+  @UseGuards(JwtAuthGuard)
   @Post(':id/ingredients')
   linkIngredient(@Param('id') id: string, @Body() dto: LinkIngredientDto) {
     return this.productsService.linkIngredient(id, dto);
@@ -158,6 +170,7 @@ export class ProductsController {
   @ApiParam({ name: 'id', format: 'uuid', description: 'Product ID' })
   @ApiParam({ name: 'ingId', format: 'uuid', description: 'Ingredient ID' })
   @ApiNoContentResponse()
+  @UseGuards(JwtAuthGuard)
   @Delete(':id/ingredients/:ingId')
   @HttpCode(HttpStatus.NO_CONTENT)
   unlinkIngredient(@Param('id') id: string, @Param('ingId') ingId: string) {
@@ -168,6 +181,7 @@ export class ProductsController {
   @ApiParam({ name: 'id', format: 'uuid', description: 'Product ID' })
   @ApiBody({ schema: { type: 'object', properties: { groupId: { type: 'string', format: 'uuid', example: 'g1h2i3j4-1234-4f1a-8c3e-9a4f0c4e2b21' } }, required: ['groupId'] } })
   @ApiOkResponse({ description: 'Addon group linked.' })
+  @UseGuards(JwtAuthGuard)
   @Post(':id/addons')
   linkAddonGroup(@Param('id') id: string, @Body('groupId') groupId: string) {
     return this.productsService.linkAddonGroup(id, groupId);
@@ -177,6 +191,7 @@ export class ProductsController {
   @ApiParam({ name: 'id', format: 'uuid', description: 'Product ID' })
   @ApiParam({ name: 'groupId', format: 'uuid', description: 'Addon Group ID' })
   @ApiNoContentResponse()
+  @UseGuards(JwtAuthGuard)
   @Delete(':id/addons/:groupId')
   @HttpCode(HttpStatus.NO_CONTENT)
   unlinkAddonGroup(@Param('id') id: string, @Param('groupId') groupId: string) {
