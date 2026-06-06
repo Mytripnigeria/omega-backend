@@ -16,7 +16,10 @@ export class FilterProductDto extends PaginationQueryDto {
 
   @ApiPropertyOptional({ example: true, description: 'Filter by availability status' })
   @IsOptional()
-  @Transform(({ value }) => value === 'true')
+  // Accept both the raw query string and the value after the global pipe's
+  // implicit conversion (which turns "true" into a real boolean) — comparing
+  // only against the string would yield `false` once it's been converted.
+  @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   status?: boolean;
 

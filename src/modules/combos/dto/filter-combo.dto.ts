@@ -11,7 +11,7 @@ export class FilterComboDto extends PaginationQueryDto {
 
   @ApiPropertyOptional({ example: true, description: 'Filter by active status' })
   @IsOptional()
-  @Transform(({ value }) => value === 'true')
+  @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   status?: boolean;
 

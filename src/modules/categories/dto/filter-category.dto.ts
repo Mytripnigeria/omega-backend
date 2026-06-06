@@ -27,7 +27,7 @@ export class FilterCategoryDto extends PaginationQueryDto {
     description: 'Filter by isActive flag (pass "true" or "false" as a string)',
   })
   @IsOptional()
-  @Transform(({ value }) => value === 'true')
+  @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   status?: boolean;
 }
