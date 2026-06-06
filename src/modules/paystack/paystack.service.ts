@@ -1,9 +1,8 @@
 import {
   BadGatewayException,
+  BadRequestException,
   Injectable,
   Logger,
-  OnModuleInit,
-  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -82,62 +81,32 @@ interface RawTransaction {
 }
 
 @Injectable()
-export class PaystackService implements OnModuleInit {
+export class PaystackService {
   private readonly logger = new Logger(PaystackService.name);
 
   constructor(private readonly config: ConfigService) {}
 
-  onModuleInit(): void {
-    // Operators need to know about a misconfigured Paystack at boot — not
-    // when the first customer hits checkout.
-    if (!this.config.get<string>('paystack.secretKey')) {
-      this.logger.warn(
-        'PAYSTACK_SECRET_KEY is not configured — Paystack checkouts will fail.',
-      );
-    }
-    if (!this.config.get<string>('paystack.publicKey')) {
-      this.logger.warn(
-        'PAYSTACK_PUBLIC_KEY is not configured — the inline popup will not load on the storefront.',
-      );
-    }
-    if (!this.config.get<string>('paystack.webhookSecret')) {
-      this.logger.warn(
-        'PAYSTACK_WEBHOOK_SECRET is not set — falling back to PAYSTACK_SECRET_KEY for webhook verification.',
-      );
-    }
-  }
-
-  private secretKey(): string {
-    const k = this.config.get<string>('paystack.secretKey') ?? '';
+  /**
+   * Every Paystack call is per-merchant: the caller passes the business's own
+   * secret key (resolved from its dashboard → Settings → Integrations). There
+   * is NO platform-wide key — if a merchant hasn't configured Paystack the
+   * operation is rejected, so one merchant can never transact on another
+   * merchant's Paystack account.
+   */
+  private resolveSecret(secretKey?: string): string {
+    const k = secretKey?.trim();
     if (!k) {
-      throw new ServiceUnavailableException(
-        'PAYSTACK_SECRET_KEY is not configured on the backend',
+      throw new BadRequestException(
+        'Paystack is not configured for this store. Add your Paystack keys in Settings → Integrations.',
       );
     }
     return k;
-  }
-
-  /**
-   * Resolves the Paystack secret to use for a call. A per-merchant override
-   * (the business's own saved key) takes precedence; only admin/global flows
-   * fall back to the platform env key. Tenant-specific flows (storefront
-   * payments) MUST pass the merchant's key so one merchant never transacts on
-   * another merchant's Paystack account.
-   */
-  private resolveSecret(override?: string): string {
-    const k = override?.trim();
-    if (k) return k;
-    return this.secretKey();
   }
 
   private baseUrl(): string {
     return (
       this.config.get<string>('paystack.baseUrl') ?? 'https://api.paystack.co'
     );
-  }
-
-  publicKey(): string {
-    return this.config.get<string>('paystack.publicKey') ?? '';
   }
 
   /**
@@ -299,12 +268,15 @@ export class PaystackService implements OnModuleInit {
    * Register a transfer recipient (a bank account) on Paystack. The returned
    * `recipientCode` is the persistent handle to use in `transfer()`.
    */
-  async createTransferRecipient(opts: {
-    name: string;
-    accountNumber: string;
-    bankCode: string;
-    currency?: string;
-  }): Promise<{
+  async createTransferRecipient(
+    opts: {
+      name: string;
+      accountNumber: string;
+      bankCode: string;
+      currency?: string;
+    },
+    secretKey?: string,
+  ): Promise<{
     recipientCode: string;
     bankName: string | null;
     accountName: string | null;
@@ -312,7 +284,7 @@ export class PaystackService implements OnModuleInit {
     const res = await fetch(`${this.baseUrl()}/transferrecipient`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.secretKey()}`,
+        Authorization: `Bearer ${this.resolveSecret(secretKey)}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -352,12 +324,15 @@ export class PaystackService implements OnModuleInit {
    * `pending` until Paystack settles it; the webhook (`transfer.success` /
    * `transfer.failed`) closes it out.
    */
-  async transfer(opts: {
-    recipientCode: string;
-    amount: number; // kobo
-    reference: string;
-    reason?: string;
-  }): Promise<{
+  async transfer(
+    opts: {
+      recipientCode: string;
+      amount: number; // kobo
+      reference: string;
+      reason?: string;
+    },
+    secretKey?: string,
+  ): Promise<{
     transferCode: string;
     reference: string;
     status: string;
@@ -366,7 +341,7 @@ export class PaystackService implements OnModuleInit {
     const res = await fetch(`${this.baseUrl()}/transfer`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.secretKey()}`,
+        Authorization: `Bearer ${this.resolveSecret(secretKey)}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -405,14 +380,17 @@ export class PaystackService implements OnModuleInit {
    * Look up a previously-initiated transfer by its reference. Used by the
    * payout worker to reconcile state when the webhook is delayed.
    */
-  async verifyTransfer(reference: string): Promise<{
+  async verifyTransfer(
+    reference: string,
+    secretKey?: string,
+  ): Promise<{
     reference: string;
     status: string;
     amount: number;
   }> {
     const res = await fetch(
       `${this.baseUrl()}/transfer/verify/${encodeURIComponent(reference)}`,
-      { headers: { Authorization: `Bearer ${this.secretKey()}` } },
+      { headers: { Authorization: `Bearer ${this.resolveSecret(secretKey)}` } },
     );
     if (!res.ok) {
       const body = await res.text();
@@ -441,16 +419,13 @@ export class PaystackService implements OnModuleInit {
   verifyWebhookSignature(
     rawBody: Buffer | string,
     signature: string,
-    secretOverride?: string,
+    merchantSecret?: string,
   ): boolean {
-    // Paystack signs webhooks with the account's secret key. For multi-tenant
-    // setups pass the paying merchant's secret so each merchant's events verify
-    // against their own account; fall back to the platform key otherwise.
-    const secret =
-      secretOverride?.trim() ||
-      this.config.get<string>('paystack.webhookSecret') ||
-      this.secretKey();
-    if (!signature) return false;
+    // Paystack signs webhooks with the account's secret key. We verify against
+    // the paying merchant's own secret (resolved from the order behind the
+    // event). With no secret we cannot trust the event — reject it.
+    const secret = merchantSecret?.trim();
+    if (!secret || !signature) return false;
     const computed = createHmac('sha512', secret)
       .update(typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8'))
       .digest('hex');

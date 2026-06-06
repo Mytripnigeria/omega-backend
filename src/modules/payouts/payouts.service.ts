@@ -27,6 +27,7 @@ import {
 } from '../../common/dto/pagination.dto';
 import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.service';
 import { PaystackService } from '../paystack/paystack.service';
+import { IntegrationsService } from '../integrations/integrations.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 
 export const PAYOUTS_QUEUE = 'payouts';
@@ -51,8 +52,27 @@ export class PayoutsService {
     private readonly dataSource: DataSource,
     private readonly wallet: MerchantWalletService,
     private readonly paystack: PaystackService,
+    private readonly integrations: IntegrationsService,
     private readonly activityLog: ActivityLogService,
   ) {}
+
+  /**
+   * This merchant's own Paystack secret (from dashboard → Integrations).
+   * Payouts move funds from the merchant's own Paystack balance, so they use
+   * the merchant's key — never a platform key or another merchant's.
+   */
+  private async paystackSecret(businessId: string): Promise<string> {
+    const cred = await this.integrations.getActiveCredential(
+      businessId,
+      'paystack',
+    );
+    if (!cred?.secretKey) {
+      throw new BadRequestException(
+        'Paystack is not configured for this business. Add your Paystack keys in Settings → Integrations.',
+      );
+    }
+    return cred.secretKey;
+  }
 
   // ─── Bank accounts ──────────────────────────────────────────────────
 
@@ -77,11 +97,14 @@ export class PayoutsService {
       accountName: string | null;
     } | null = null;
     try {
-      recipient = await this.paystack.createTransferRecipient({
-        name: dto.label,
-        accountNumber: dto.accountNumber,
-        bankCode: dto.bankCode,
-      });
+      recipient = await this.paystack.createTransferRecipient(
+        {
+          name: dto.label,
+          accountNumber: dto.accountNumber,
+          bankCode: dto.bankCode,
+        },
+        await this.paystackSecret(actor.businessId),
+      );
     } catch (err) {
       this.logger.warn(
         `Recipient registration failed for ${dto.accountNumber}: ${(err as Error).message}. Saving without recipient code; payouts to this account will fail until it's re-registered.`,
@@ -373,12 +396,15 @@ export class PayoutsService {
     await this.payoutRepo.save(payout);
 
     try {
-      const result = await this.paystack.transfer({
-        recipientCode: bank.recipientCode,
-        amount: Math.round(Number(payout.amount) * 100), // kobo
-        reference: payout.reference,
-        reason: payout.note ?? `Payout ${payout.reference}`,
-      });
+      const result = await this.paystack.transfer(
+        {
+          recipientCode: bank.recipientCode,
+          amount: Math.round(Number(payout.amount) * 100), // kobo
+          reference: payout.reference,
+          reason: payout.note ?? `Payout ${payout.reference}`,
+        },
+        await this.paystackSecret(payout.businessId),
+      );
       payout.providerTransferCode = result.transferCode;
       payout.providerStatus = result.status;
       await this.payoutRepo.save(payout);

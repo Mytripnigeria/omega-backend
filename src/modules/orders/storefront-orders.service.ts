@@ -560,7 +560,9 @@ export class StorefrontOrdersService {
 
   /** Webhook entry: marks the order paid via paystack reference. Idempotent. */
   async applyWebhookSuccess(reference: string): Promise<void> {
-    const verified = await this.paystack.verify(reference);
+    // Verify against the paying merchant's own Paystack account.
+    const secretKey = await this.paystackSecretForReference(reference);
+    const verified = await this.paystack.verify(reference, secretKey);
     if (verified.status !== 'success') return;
     const order = await this.orderRepo.findOne({
       where: { paymentReference: reference },

@@ -7,6 +7,7 @@ import { PayoutsService, PAYOUTS_QUEUE } from './payouts.service';
 import { PayoutsController } from './payouts.controller';
 import { PayoutsProcessor } from './payouts.processor';
 import { PaystackModule } from '../paystack/paystack.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
 import { ActivityLogModule } from '../activity-log/activity-log.module';
 
 @Module({
@@ -14,6 +15,7 @@ import { ActivityLogModule } from '../activity-log/activity-log.module';
     TypeOrmModule.forFeature([PayoutEntity, PayoutBankAccountEntity]),
     BullModule.registerQueue({ name: PAYOUTS_QUEUE }),
     PaystackModule,
+    IntegrationsModule,
     ActivityLogModule,
     // MerchantWalletModule is @Global so we don't need to import it.
   ],
