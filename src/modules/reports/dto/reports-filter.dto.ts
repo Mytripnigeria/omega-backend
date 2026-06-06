@@ -28,10 +28,14 @@ export class ReportsRangeDto {
 }
 
 export class SalesReportFilterDto extends ReportsRangeDto {
-  @ApiPropertyOptional({ enum: ['day', 'week', 'month'], example: 'day' })
+  @ApiPropertyOptional({
+    enum: ['hour', 'day', 'week', 'month'],
+    example: 'day',
+    description: 'Bucket granularity. Use `hour` for intraday reports like Daily Sales.',
+  })
   @IsOptional()
-  @IsEnum(['day', 'week', 'month'])
-  groupBy?: 'day' | 'week' | 'month';
+  @IsEnum(['hour', 'day', 'week', 'month'])
+  groupBy?: 'hour' | 'day' | 'week' | 'month';
 }
 
 export class DashboardSummaryFilterDto {

@@ -18,6 +18,7 @@ import {
 import { StorefrontBannerEntity } from './entities/storefront-banner.entity';
 import { StorefrontThemePresetEntity } from './entities/storefront-theme-preset.entity';
 import { StorefrontPageViewEntity } from './entities/storefront-page-view.entity';
+import { PaymentMethodEntity } from '../payment-methods/entities/payment-method.entity';
 import { UpdateStorefrontConfigDto } from './dto/config.dto';
 import {
   CreateStorefrontPageDto,
@@ -109,6 +110,8 @@ export class StorefrontService implements OnModuleInit {
     private readonly themeRepo: Repository<StorefrontThemePresetEntity>,
     @InjectRepository(StorefrontPageViewEntity)
     private readonly viewRepo: Repository<StorefrontPageViewEntity>,
+    @InjectRepository(PaymentMethodEntity)
+    private readonly paymentMethodRepo: Repository<PaymentMethodEntity>,
     private readonly activityLog: ActivityLogService,
     private readonly business: BusinessService,
     private readonly loyalty: LoyaltyService,
@@ -595,6 +598,65 @@ export class StorefrontService implements OnModuleInit {
 
   async publicConfig(businessId: string): Promise<StorefrontConfigResponseDto> {
     return this.getConfig(businessId);
+  }
+
+  /**
+   * Resolve a businessId from the request hostname (custom domain). Lets a
+   * single storefront deployment serve any merchant by domain — e.g.
+   * scoops.ng -> the business whose `customDomain` is "scoops.ng".
+   */
+  async resolveByDomain(host: string): Promise<{ businessId: string }> {
+    const normalized = (host ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/\/.*$/, '')
+      .replace(/:\d+$/, '')
+      .replace(/^www\./, '');
+    if (!normalized) throw new BadRequestException('host is required');
+    const config = await this.configRepo
+      .createQueryBuilder('c')
+      .where('LOWER(c.customDomain) = :host', { host: normalized })
+      .getOne();
+    if (!config) throw new NotFoundException('No storefront for this domain');
+    return { businessId: config.businessId };
+  }
+
+  /**
+   * Public, sanitised list of enabled payment methods for checkout. For
+   * `transfer` methods the bank details from `config` are exposed so the
+   * storefront can show deposit/transfer instructions (e.g. wallet top-up).
+   */
+  async publicPaymentMethods(businessId: string): Promise<
+    Array<{
+      id: string;
+      type: string;
+      label: string;
+      order: number;
+      bank?: { bankName?: string; accountNumber?: string; accountName?: string };
+    }>
+  > {
+    const methods = await this.paymentMethodRepo.find({
+      where: { businessId, isEnabled: true },
+      order: { order: 'ASC', createdAt: 'ASC' },
+    });
+    return methods.map((m) => {
+      const cfg = (m.config ?? {}) as Record<string, unknown>;
+      const base = { id: m.id, type: m.type, label: m.label, order: m.order };
+      if (m.type === 'transfer') {
+        return {
+          ...base,
+          bank: {
+            bankName: typeof cfg.bankName === 'string' ? cfg.bankName : undefined,
+            accountNumber:
+              typeof cfg.accountNumber === 'string' ? cfg.accountNumber : undefined,
+            accountName:
+              typeof cfg.accountName === 'string' ? cfg.accountName : undefined,
+          },
+        };
+      }
+      return base;
+    });
   }
 
   async publicBanners(

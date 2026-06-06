@@ -29,6 +29,7 @@ import {
   StorefrontLoginDto,
   StorefrontRegisterDto,
 } from './dto/storefront-register.dto';
+import { StorefrontGoogleAuthDto } from './dto/google-auth.dto';
 import { UserJwtGuard } from '../../common/guards/user-jwt.guard';
 import { Request } from 'express';
 import { Req } from '@nestjs/common';
@@ -213,6 +214,18 @@ export class AuthController {
   @Post('storefront/login')
   storefrontLogin(@Body() dto: StorefrontLoginDto) {
     return this.authService.storefrontLogin(dto);
+  }
+
+  @ApiOperation({
+    summary: 'Storefront Google login/signup',
+    description:
+      'Verifies a Google ID token and issues storefront tokens. Creates a customer + surrogate ' +
+      'user on first sign-in. Used for "Continue with Google" on login and sign-up.',
+  })
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @Post('storefront/google')
+  storefrontGoogle(@Body() dto: StorefrontGoogleAuthDto) {
+    return this.authService.storefrontGoogle(dto);
   }
 
   @ApiOperation({ summary: 'Storefront refresh token' })

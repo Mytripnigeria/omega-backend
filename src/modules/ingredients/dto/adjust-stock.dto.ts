@@ -1,5 +1,13 @@
-import { IsDateString, IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
+import {
+  IsDateString,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { MovementType } from '../entities/ingredient-movement.entity';
 
 export class AdjustStockDto {
   @ApiProperty({ example: -5, description: 'Delta to apply to currentStock. Positive = restock, negative = consumption or wastage.' })
@@ -28,4 +36,13 @@ export class AdjustStockDto {
   @IsOptional()
   @IsUUID()
   locationId?: string;
+
+  @ApiPropertyOptional({
+    enum: MovementType,
+    description:
+      'Movement classification. Use `waste` for spoilage / damage / discarded stock — surfaced on the merchant hub Waste Management view. When omitted, defaults to INTAKE (positive adjustment) or CORRECTION (negative).',
+  })
+  @IsOptional()
+  @IsEnum(MovementType)
+  type?: MovementType;
 }

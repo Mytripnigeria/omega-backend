@@ -20,7 +20,12 @@ import {
 import { LoyaltySettingsEntity } from '../entities/loyalty-settings.entity';
 
 export class LoyaltyBenefitDto implements LoyaltyBenefit {
-  @ApiProperty()
+  // `id` is omitted by the client when creating a new benefit; the service
+  // fills it with a generated UUID before persisting. Always present on
+  // responses, which is why @Expose() is needed for response serialization.
+  @ApiPropertyOptional()
+  @Expose()
+  @IsOptional()
   @IsString()
   id: string;
 
@@ -33,6 +38,7 @@ export class LoyaltyBenefitDto implements LoyaltyBenefit {
       'exclusive_access',
     ],
   })
+  @Expose()
   @IsEnum([
     'discount',
     'free_shipping',
@@ -43,10 +49,13 @@ export class LoyaltyBenefitDto implements LoyaltyBenefit {
   type: LoyaltyBenefitType;
 
   @ApiProperty()
+  @Expose()
   @IsNumber()
   value: number;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ default: '' })
+  @Expose()
+  @IsOptional()
   @IsString()
   description: string;
 }

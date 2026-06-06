@@ -13,6 +13,7 @@ import {
   WalletTransactionEntity,
 } from '../customers/entities/wallet-transaction.entity';
 import { PaystackModule } from '../paystack/paystack.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
 import { OrdersService } from './orders.service';
 import { StorefrontOrdersService } from './storefront-orders.service';
 import { OrdersController } from './orders.controller';
@@ -63,6 +64,7 @@ import { IngredientLocationStockEntity } from '../ingredients/entities/ingredien
     ReferralsModule,
     BusinessModule,
     PaystackModule,
+    IntegrationsModule,
     PushNotificationsModule,
   ],
   controllers: [

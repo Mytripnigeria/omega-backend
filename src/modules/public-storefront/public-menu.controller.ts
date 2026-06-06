@@ -16,6 +16,7 @@ import { ComboEntity } from '../combos/entities/combo.entity';
 import { ComboResponseDto } from '../combos/dto/combo-response.dto';
 import { StoreEntity } from '../store/entities/store.entity';
 import { StoreResponseDto } from '../store/dto/store-response.dto';
+import { OrderItemEntity } from '../orders/entities/order-item.entity';
 
 @ApiTags('public-storefront')
 @Controller('public/storefront')
@@ -29,6 +30,8 @@ export class PublicMenuController {
     private readonly comboRepo: Repository<ComboEntity>,
     @InjectRepository(StoreEntity)
     private readonly storeRepo: Repository<StoreEntity>,
+    @InjectRepository(OrderItemEntity)
+    private readonly orderItemRepo: Repository<OrderItemEntity>,
   ) {}
 
   @ApiOperation({
@@ -90,27 +93,36 @@ export class PublicMenuController {
     const [ch, cm] = slot.close.split(':').map((n) => parseInt(n, 10));
     const stepMin = 30;
     const slots: { startsAt: string; endsAt: string }[] = [];
-    let cursor = new Date(target);
-    cursor.setHours(oh, om, 0, 0);
-    const endOfDay = new Date(target);
-    endOfDay.setHours(ch, cm, 0, 0);
+
+    // Scheduling window is intentionally tighter than the raw opening hours:
+    // the first selectable time is 30 min AFTER opening and the last slot must
+    // end no later than 30 min BEFORE closing (kitchen prep / wind-down buffer).
+    const earliest = new Date(target);
+    earliest.setHours(oh, om, 0, 0);
+    earliest.setTime(earliest.getTime() + stepMin * 60_000);
+    const lastEnd = new Date(target);
+    lastEnd.setHours(ch, cm, 0, 0);
+    lastEnd.setTime(lastEnd.getTime() - stepMin * 60_000);
+
+    let cursor = new Date(earliest);
     if (isToday && cursor < now) {
-      // Round up to the next 30-min mark from now.
+      // Round up to the next 30-min mark from now, but never before `earliest`.
       const nowRounded = new Date(now);
       nowRounded.setSeconds(0, 0);
       const minsPast = nowRounded.getMinutes() % stepMin;
       if (minsPast > 0) nowRounded.setMinutes(nowRounded.getMinutes() + (stepMin - minsPast));
-      cursor = nowRounded;
+      if (nowRounded > cursor) cursor = nowRounded;
     }
-    while (cursor.getTime() + stepMin * 60_000 <= endOfDay.getTime()) {
+    while (cursor.getTime() + stepMin * 60_000 <= lastEnd.getTime()) {
       const next = new Date(cursor.getTime() + stepMin * 60_000);
       slots.push({ startsAt: cursor.toISOString(), endsAt: next.toISOString() });
       cursor = next;
     }
 
     const openMs = new Date(target).setHours(oh, om, 0, 0);
+    const closeMs = new Date(target).setHours(ch, cm, 0, 0);
     const asapAvailable =
-      isToday && now.getTime() >= openMs && now.getTime() < endOfDay.getTime();
+      isToday && now.getTime() >= openMs && now.getTime() < closeMs;
 
     return { date: dateStr, asapAvailable, slots };
   }
@@ -248,6 +260,99 @@ export class PublicMenuController {
       order: { createdAt: 'DESC' },
     });
     return combos.map(ComboResponseDto.from);
+  }
+
+  @ApiOperation({
+    summary: 'Product recommendations',
+    description:
+      'Returns products most frequently ordered alongside `productId` for the store ' +
+      '(market-basket). Without `productId`, returns the store\'s top sellers. Falls back ' +
+      'to top sellers when co-order history is thin.',
+  })
+  @ApiQuery({ name: 'businessId', format: 'uuid' })
+  @ApiQuery({ name: 'storeId', format: 'uuid' })
+  @ApiQuery({ name: 'productId', required: false, format: 'uuid' })
+  @ApiQuery({ name: 'limit', required: false, example: 4 })
+  @Get('recommendations')
+  async recommendations(
+    @Query('businessId') businessId: string,
+    @Query('storeId') storeId: string,
+    @Query('productId') productId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (!businessId || !storeId)
+      throw new BadRequestException('businessId and storeId are required');
+    await this.assertStore(businessId, storeId);
+    const take = Math.min(Math.max(parseInt(limit ?? '4', 10) || 4, 1), 12);
+
+    const rankedIds: string[] = [];
+
+    // 1. Market-basket: products co-ordered with the seed product.
+    if (productId) {
+      const rows = await this.orderItemRepo
+        .createQueryBuilder('oi')
+        .select('oi.productId', 'productId')
+        .addSelect('SUM(oi.quantity)', 'freq')
+        .innerJoin('orders', 'o', 'o.id = oi.orderId')
+        .innerJoin(
+          'order_items',
+          'seed',
+          'seed.orderId = oi.orderId AND seed.productId = :productId',
+          { productId },
+        )
+        .where('o.storeId = :storeId', { storeId })
+        .andWhere('oi.productId IS NOT NULL')
+        .andWhere('oi.productId != :productId', { productId })
+        .groupBy('oi.productId')
+        .orderBy('freq', 'DESC')
+        .limit(take)
+        .getRawMany<{ productId: string }>();
+      rankedIds.push(...rows.map((r) => r.productId));
+    }
+
+    // 2. Fallback / top-up with overall top sellers for the store.
+    if (rankedIds.length < take) {
+      const exclude = [...rankedIds, ...(productId ? [productId] : [])];
+      const qb = this.orderItemRepo
+        .createQueryBuilder('oi')
+        .select('oi.productId', 'productId')
+        .addSelect('SUM(oi.quantity)', 'freq')
+        .innerJoin('orders', 'o', 'o.id = oi.orderId')
+        .where('o.storeId = :storeId', { storeId })
+        .andWhere('oi.productId IS NOT NULL')
+        .groupBy('oi.productId')
+        .orderBy('freq', 'DESC')
+        .limit(take * 2);
+      if (exclude.length)
+        qb.andWhere('oi.productId NOT IN (:...exclude)', { exclude });
+      const rows = await qb.getRawMany<{ productId: string }>();
+      for (const r of rows) {
+        if (rankedIds.length >= take) break;
+        if (!rankedIds.includes(r.productId)) rankedIds.push(r.productId);
+      }
+    }
+
+    if (rankedIds.length === 0) return [];
+
+    // Hydrate full products (active + storefront-visible only) and preserve rank order.
+    const products = await this.productRepo
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.variations', 'variations')
+      .leftJoinAndSelect('p.addonGroups', 'addonGroups')
+      .leftJoinAndSelect('addonGroups.addons', 'addons')
+      .where('p.id IN (:...ids)', { ids: rankedIds })
+      .andWhere('p.storeId = :storeId', { storeId })
+      .andWhere('p.status = true')
+      .andWhere(
+        "(p.visibility IS NULL OR p.visibility = '' OR (',' || p.visibility || ',') LIKE '%,storefront,%')",
+      )
+      .getMany();
+
+    const byId = new Map(products.map((p) => [p.id, p]));
+    return rankedIds
+      .map((id) => byId.get(id))
+      .filter((p): p is ProductEntity => !!p)
+      .map(ProductResponseDto.from);
   }
 
   private async assertStore(businessId: string, storeId: string): Promise<void> {

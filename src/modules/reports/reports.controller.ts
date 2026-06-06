@@ -1,14 +1,25 @@
-import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOkResponse,
   ApiOperation,
+  ApiProduces,
+  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { JwtOrStaffGuard } from '../../common/guards/jwt-or-staff.guard';
 import { JwtPayload } from '../../common/types/jwt-payload.types';
 import { ReportsService } from './reports.service';
+import { ExportFormat, ExportType, ReportsExporter } from './reports.exporter';
 import {
   DashboardSummaryFilterDto,
   ReportsRangeDto,
@@ -18,10 +29,13 @@ import {
 import {
   DashboardSummaryDto,
   DeliveryStatsDto,
+  FoodCostReportDto,
   KitchenStatsDto,
   SalesReportDto,
   StaffPerformanceDto,
+  StockReportDto,
   TopProductsReportDto,
+  WasteReportDto,
 } from './dto/reports-response.dto';
 
 interface AuthedRequest extends Request {
@@ -54,7 +68,10 @@ function actorFrom(req: AuthedRequest): {
 @UseGuards(JwtOrStaffGuard)
 @Controller('reports')
 export class ReportsController {
-  constructor(private readonly service: ReportsService) {}
+  constructor(
+    private readonly service: ReportsService,
+    private readonly exporter: ReportsExporter,
+  ) {}
 
   @ApiOperation({
     summary: 'Sales report',
@@ -129,5 +146,149 @@ export class ReportsController {
     @Query() filter: TopProductsFilterDto,
   ) {
     return this.service.getTopProducts(actorFrom(req), filter);
+  }
+
+  @ApiOperation({
+    summary: 'Food cost analysis',
+    description:
+      'Food cost % computed from sold items: ' +
+      '(sum of qty × product cost price) / (sum of order-item subtotals) × 100. ' +
+      'Only COMPLETED orders count. Returns overall stats plus a breakdown by ' +
+      'category and by individual item.',
+  })
+  @ApiOkResponse({ type: FoodCostReportDto })
+  @Get('food-cost')
+  foodCost(@Req() req: AuthedRequest, @Query() filter: ReportsRangeDto) {
+    return this.service.getFoodCostReport(actorFrom(req), filter);
+  }
+
+  @ApiOperation({
+    summary: 'Waste analysis',
+    description:
+      'Aggregates ingredient-movement rows tagged as WASTE (logged from the workstation Outstore page). ' +
+      'Returns stats, breakdowns by reason and by ingredient, and the recent log.',
+  })
+  @ApiOkResponse({ type: WasteReportDto })
+  @Get('waste')
+  waste(@Req() req: AuthedRequest, @Query() filter: ReportsRangeDto) {
+    return this.service.getWasteReport(actorFrom(req), filter);
+  }
+
+  @ApiOperation({
+    summary: 'Stock report',
+    description:
+      'Inventory snapshot from IngredientEntity: total value, status counts, expiring-soon count, and per-ingredient rows.',
+  })
+  @ApiOkResponse({ type: StockReportDto })
+  @Get('stock')
+  stock(@Req() req: AuthedRequest, @Query() filter: ReportsRangeDto) {
+    return this.service.getStockReport(actorFrom(req), filter);
+  }
+
+  @ApiOperation({
+    summary: 'Export a report as Excel (.xlsx) or PDF',
+    description:
+      'Streams the requested report in the requested format. Supported types: ' +
+      '`sales`, `top-products`, `food-cost`, `waste`, `stock`. Supported formats: ' +
+      '`xlsx` (default) and `pdf`. The `storeName` query param (optional) is only ' +
+      'used as a label on the document.',
+  })
+  @ApiProduces(
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/pdf',
+  )
+  @ApiQuery({
+    name: 'type',
+    enum: ['sales', 'top-products', 'food-cost', 'waste', 'stock'],
+  })
+  @ApiQuery({
+    name: 'format',
+    enum: ['xlsx', 'pdf'],
+    required: false,
+  })
+  @ApiQuery({ name: 'storeId', required: false, format: 'uuid' })
+  @ApiQuery({ name: 'storeName', required: false })
+  @ApiQuery({ name: 'dateFrom', required: false, example: '2026-06-01' })
+  @ApiQuery({ name: 'dateTo', required: false, example: '2026-06-30' })
+  @Get('export')
+  async export(
+    @Req() req: AuthedRequest,
+    @Res() res: Response,
+    @Query('type') type: string,
+    @Query() filter: ReportsRangeDto,
+    @Query('format') formatQuery?: string,
+    @Query('storeName') storeName?: string,
+  ): Promise<void> {
+    const allowedTypes: ExportType[] = [
+      'sales',
+      'top-products',
+      'food-cost',
+      'waste',
+      'stock',
+    ];
+    if (!allowedTypes.includes(type as ExportType)) {
+      throw new BadRequestException(
+        `Unsupported report type "${type}". Use one of: ${allowedTypes.join(', ')}.`,
+      );
+    }
+    const format: ExportFormat =
+      formatQuery === 'pdf' ? 'pdf' : formatQuery === 'xlsx' || !formatQuery ? 'xlsx' : 'xlsx';
+    if (formatQuery && formatQuery !== 'pdf' && formatQuery !== 'xlsx') {
+      throw new BadRequestException(
+        `Unsupported format "${formatQuery}". Use "xlsx" or "pdf".`,
+      );
+    }
+
+    const actor = actorFrom(req);
+    const meta = {
+      storeName,
+      dateFrom: filter.dateFrom,
+      dateTo: filter.dateTo,
+    };
+
+    let report:
+      | Awaited<ReturnType<ReportsService['getSalesReport']>>
+      | Awaited<ReturnType<ReportsService['getTopProducts']>>
+      | Awaited<ReturnType<ReportsService['getFoodCostReport']>>
+      | Awaited<ReturnType<ReportsService['getWasteReport']>>
+      | Awaited<ReturnType<ReportsService['getStockReport']>>;
+    switch (type as ExportType) {
+      case 'sales':
+        report = await this.service.getSalesReport(actor, {
+          ...filter,
+          groupBy: 'day',
+        });
+        break;
+      case 'top-products':
+        report = await this.service.getTopProducts(actor, {
+          ...filter,
+          limit: 50,
+        });
+        break;
+      case 'food-cost':
+        report = await this.service.getFoodCostReport(actor, filter);
+        break;
+      case 'waste':
+        report = await this.service.getWasteReport(actor, filter);
+        break;
+      case 'stock':
+        report = await this.service.getStockReport(actor, filter);
+        break;
+    }
+
+    const payload = await this.exporter.export(
+      type as ExportType,
+      report,
+      meta,
+      format,
+    );
+
+    res.setHeader('Content-Type', payload.contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${payload.filename}"`,
+    );
+    res.setHeader('Content-Length', String(payload.buffer.byteLength));
+    res.end(payload.buffer);
   }
 }

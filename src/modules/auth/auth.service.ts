@@ -12,6 +12,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import { OAuth2Client } from 'google-auth-library';
 import { AdminEntity } from '../admin/entities/admin.entity';
 import { BusinessEntity } from '../business/entities/business.entity';
 import { StoreEntity } from '../store/entities/store.entity';
@@ -31,6 +32,7 @@ import {
   StorefrontLoginDto,
   StorefrontRegisterDto,
 } from './dto/storefront-register.dto';
+import { StorefrontGoogleAuthDto } from './dto/google-auth.dto';
 import {
   RequestPhoneOtpDto,
   VerifyPhoneOtpDto,
@@ -81,6 +83,7 @@ function sha256(value: string): string {
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private googleClient: OAuth2Client | null = null;
 
   constructor(
     private readonly adminService: AdminService,
@@ -447,6 +450,79 @@ export class AuthService {
 
     await this.usersService.recordLogin(user.id);
 
+    return this.issueUserTokens(user.id, user.email, user.businessId, user.customerId);
+  }
+
+  /**
+   * Sign in (or sign up) a storefront customer with a Google ID token. The
+   * token is verified against GOOGLE_CLIENT_ID, then we find-or-create the
+   * customer + surrogate user by the verified Google email.
+   */
+  async storefrontGoogle(dto: StorefrontGoogleAuthDto) {
+    const clientId =
+      this.configService.get<string>('google.clientId') ??
+      process.env.GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      throw new BadRequestException('Google login is not configured');
+    }
+    if (!this.googleClient) this.googleClient = new OAuth2Client(clientId);
+
+    let payload;
+    try {
+      const ticket = await this.googleClient.verifyIdToken({
+        idToken: dto.idToken,
+        audience: clientId,
+      });
+      payload = ticket.getPayload();
+    } catch {
+      throw new UnauthorizedException('Invalid Google token');
+    }
+    if (!payload?.email || !payload.email_verified) {
+      throw new UnauthorizedException('Google account has no verified email');
+    }
+
+    const email = payload.email.toLowerCase();
+    const firstName = payload.given_name ?? payload.name ?? 'Customer';
+    const lastName = payload.family_name ?? '';
+
+    let customer = await this.customersService.findByEmailOrPhone(
+      dto.businessId,
+      email,
+      undefined,
+    );
+    if (!customer) {
+      customer = await this.customersService.createInternal(dto.businessId, {
+        firstName,
+        lastName,
+        email,
+        source: CustomerSource.STOREFRONT,
+      });
+      if (dto.referredByCode) {
+        try {
+          await this.referralsService.recordSignUp(
+            dto.businessId,
+            customer.id,
+            dto.referredByCode,
+          );
+        } catch {
+          // Bad referral code shouldn't block sign-up.
+        }
+      }
+    }
+
+    let user = await this.usersService.findByCustomerId(customer.id);
+    if (!user) {
+      const randomPassword = crypto.randomBytes(32).toString('hex');
+      const saltRounds = this.configService.get<number>('bcryptSaltRounds') ?? 10;
+      user = await this.usersService.create({
+        businessId: dto.businessId,
+        customerId: customer.id,
+        email,
+        password: await bcrypt.hash(randomPassword, saltRounds),
+      });
+    }
+
+    await this.usersService.recordLogin(user.id);
     return this.issueUserTokens(user.id, user.email, user.businessId, user.customerId);
   }
 

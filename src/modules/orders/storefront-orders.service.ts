@@ -40,6 +40,7 @@ import {
   PointsTransactionType,
 } from '../customers/entities/wallet-transaction.entity';
 import { PaystackService } from '../paystack/paystack.service';
+import { IntegrationsService } from '../integrations/integrations.service';
 import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
 import { TransactionMethod } from '../financial-transactions/entities/financial-transaction.entity';
 import { UserJwtPayload } from '../../common/types/jwt-payload.types';
@@ -106,12 +107,52 @@ export class StorefrontOrdersService {
     private readonly couponsService: CouponsService,
     private readonly activityLog: ActivityLogService,
     private readonly paystack: PaystackService,
+    private readonly integrations: IntegrationsService,
     private readonly ledger: FinancialTransactionsService,
     private readonly loyalty: LoyaltyService,
     private readonly referrals: ReferralsService,
     private readonly business: BusinessService,
     private readonly merchantWallet: MerchantWalletService,
   ) {}
+
+  /**
+   * Resolves THIS business's enabled Paystack credentials. Strictly scoped to
+   * the passed businessId so a customer's payment is always processed on their
+   * own merchant's Paystack account — never the platform's or another
+   * merchant's. Throws a clear, customer-facing error when not configured.
+   */
+  private async requirePaystackCreds(businessId: string) {
+    const cred = await this.integrations.getActiveCredential(
+      businessId,
+      'paystack',
+    );
+    if (!cred?.secretKey) {
+      throw new BadRequestException(
+        'Card payment is unavailable — this store has not set up its Paystack keys yet.',
+      );
+    }
+    return cred;
+  }
+
+  /**
+   * Resolves the paying merchant's Paystack secret from a payment reference —
+   * used to verify webhooks against the correct merchant's account. Returns
+   * undefined if the order/credential can't be found (caller falls back to the
+   * platform key).
+   */
+  async paystackSecretForReference(
+    reference: string,
+  ): Promise<string | undefined> {
+    const order = await this.orderRepo.findOne({
+      where: { paymentReference: reference },
+    });
+    if (!order) return undefined;
+    const cred = await this.integrations.getActiveCredential(
+      order.businessId,
+      'paystack',
+    );
+    return cred?.secretKey;
+  }
 
   private mapPaymentChannelToMethod(
     ch: OrderEntity['paymentChannel'] | null | undefined,
@@ -374,14 +415,19 @@ export class StorefrontOrdersService {
     const total = Number(saved.total);
     try {
       if (dto.paymentChannel === 'paystack' && total > 0) {
+        // Tenant-scoped: always this merchant's own Paystack account.
+        const creds = await this.requirePaystackCreds(user.businessId);
         if (savedAuthorizationCode) {
-          const verified = await this.paystack.chargeAuthorization({
-            email: this.emailFor(customer),
-            amount: Math.round(total * 100),
-            authorizationCode: savedAuthorizationCode,
-            reference: saved.paymentReference!,
-            metadata: { orderId: saved.id, orderNumber: saved.orderNumber },
-          });
+          const verified = await this.paystack.chargeAuthorization(
+            {
+              email: this.emailFor(customer),
+              amount: Math.round(total * 100),
+              authorizationCode: savedAuthorizationCode,
+              reference: saved.paymentReference!,
+              metadata: { orderId: saved.id, orderNumber: saved.orderNumber },
+            },
+            creds.secretKey,
+          );
           if (verified.status !== 'success') {
             throw new BadRequestException(
               'Card authorization failed. Please try again.',
@@ -390,18 +436,26 @@ export class StorefrontOrdersService {
           await this.markOrderPaid(saved.id, verified.reference);
           payment = { requiresAction: false, reference: verified.reference };
         } else {
-          const init = await this.paystack.initialize({
-            email: this.emailFor(customer),
-            amount: Math.round(total * 100),
-            reference: saved.paymentReference!,
-            metadata: { orderId: saved.id, orderNumber: saved.orderNumber },
-          });
+          if (!creds.publicKey) {
+            throw new BadRequestException(
+              'Card payment is unavailable — this store has not set its Paystack public key.',
+            );
+          }
+          const init = await this.paystack.initialize(
+            {
+              email: this.emailFor(customer),
+              amount: Math.round(total * 100),
+              reference: saved.paymentReference!,
+              metadata: { orderId: saved.id, orderNumber: saved.orderNumber },
+            },
+            creds.secretKey,
+          );
           payment = {
             requiresAction: true,
             authorizationUrl: init.authorizationUrl,
             accessCode: init.accessCode,
             reference: init.reference,
-            publicKey: this.paystack.publicKey(),
+            publicKey: creds.publicKey,
           };
         }
       } else if (
@@ -456,7 +510,9 @@ export class StorefrontOrdersService {
     if (order.paymentReference && order.paymentReference !== reference) {
       throw new BadRequestException('Payment reference mismatch');
     }
-    const verified = await this.paystack.verify(reference);
+    // Verify against this merchant's own Paystack account.
+    const creds = await this.requirePaystackCreds(user.businessId);
+    const verified = await this.paystack.verify(reference, creds.secretKey);
     if (verified.status === 'success') {
       await this.markOrderPaid(orderId, reference);
       // Persist authorization for one-click future checkouts

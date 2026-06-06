@@ -34,6 +34,7 @@ import {
   WalletTransactionType,
 } from '../customers/entities/wallet-transaction.entity';
 import { PaystackService } from '../paystack/paystack.service';
+import { IntegrationsService } from '../integrations/integrations.service';
 import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
 import { TransactionMethod } from '../financial-transactions/entities/financial-transaction.entity';
 import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.service';
@@ -85,6 +86,7 @@ export class OrdersService {
     private readonly ledger: FinancialTransactionsService,
     private readonly coupons: CouponsService,
     private readonly paystack: PaystackService,
+    private readonly integrations: IntegrationsService,
     private readonly merchantWallet: MerchantWalletService,
     private readonly pushService: PushService,
   ) {}
@@ -717,9 +719,15 @@ export class OrdersService {
     ) {
       try {
         const refundAmount = Number(order.paidAmount);
+        // Refund from this merchant's own Paystack account.
+        const cred = await this.integrations.getActiveCredential(
+          order.businessId,
+          'paystack',
+        );
         await this.paystack.refund(
           order.paymentReference,
           Math.round(refundAmount * 100),
+          cred?.secretKey,
         );
         await this.ledger.record(
           {

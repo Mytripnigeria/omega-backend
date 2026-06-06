@@ -117,6 +117,19 @@ export class PaystackService implements OnModuleInit {
     return k;
   }
 
+  /**
+   * Resolves the Paystack secret to use for a call. A per-merchant override
+   * (the business's own saved key) takes precedence; only admin/global flows
+   * fall back to the platform env key. Tenant-specific flows (storefront
+   * payments) MUST pass the merchant's key so one merchant never transacts on
+   * another merchant's Paystack account.
+   */
+  private resolveSecret(override?: string): string {
+    const k = override?.trim();
+    if (k) return k;
+    return this.secretKey();
+  }
+
   private baseUrl(): string {
     return (
       this.config.get<string>('paystack.baseUrl') ?? 'https://api.paystack.co'
@@ -133,11 +146,12 @@ export class PaystackService implements OnModuleInit {
    */
   async initialize(
     opts: PaystackInitializeOptions,
+    secretOverride?: string,
   ): Promise<PaystackInitializeResponse> {
     const res = await fetch(`${this.baseUrl()}/transaction/initialize`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.secretKey()}`,
+        Authorization: `Bearer ${this.resolveSecret(secretOverride)}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -172,11 +186,14 @@ export class PaystackService implements OnModuleInit {
     };
   }
 
-  async verify(reference: string): Promise<PaystackVerifyResponse> {
+  async verify(
+    reference: string,
+    secretOverride?: string,
+  ): Promise<PaystackVerifyResponse> {
     const res = await fetch(
       `${this.baseUrl()}/transaction/verify/${encodeURIComponent(reference)}`,
       {
-        headers: { Authorization: `Bearer ${this.secretKey()}` },
+        headers: { Authorization: `Bearer ${this.resolveSecret(secretOverride)}` },
       },
     );
     if (!res.ok) {
@@ -195,17 +212,20 @@ export class PaystackService implements OnModuleInit {
    * Charge a saved authorization (one-click checkout). Used when the customer
    * picks a saved card. The card must have been verified beforehand.
    */
-  async chargeAuthorization(opts: {
-    email: string;
-    amount: number; // kobo
-    authorizationCode: string;
-    reference: string;
-    metadata?: Record<string, unknown>;
-  }): Promise<PaystackVerifyResponse> {
+  async chargeAuthorization(
+    opts: {
+      email: string;
+      amount: number; // kobo
+      authorizationCode: string;
+      reference: string;
+      metadata?: Record<string, unknown>;
+    },
+    secretOverride?: string,
+  ): Promise<PaystackVerifyResponse> {
     const res = await fetch(`${this.baseUrl()}/transaction/charge_authorization`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.secretKey()}`,
+        Authorization: `Bearer ${this.resolveSecret(secretOverride)}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -237,7 +257,11 @@ export class PaystackService implements OnModuleInit {
    * a full refund when `amount` is omitted. Returns Paystack's raw refund
    * response shape.
    */
-  async refund(reference: string, amount?: number): Promise<{
+  async refund(
+    reference: string,
+    amount?: number,
+    secretOverride?: string,
+  ): Promise<{
     id: number | string;
     transaction: { reference: string };
     amount: number;
@@ -246,7 +270,7 @@ export class PaystackService implements OnModuleInit {
     const res = await fetch(`${this.baseUrl()}/refund`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.secretKey()}`,
+        Authorization: `Bearer ${this.resolveSecret(secretOverride)}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -414,9 +438,18 @@ export class PaystackService implements OnModuleInit {
    * Validate a Paystack webhook signature (header `x-paystack-signature`).
    * Webhooks are signed with HMAC-SHA512 using the secret key.
    */
-  verifyWebhookSignature(rawBody: Buffer | string, signature: string): boolean {
+  verifyWebhookSignature(
+    rawBody: Buffer | string,
+    signature: string,
+    secretOverride?: string,
+  ): boolean {
+    // Paystack signs webhooks with the account's secret key. For multi-tenant
+    // setups pass the paying merchant's secret so each merchant's events verify
+    // against their own account; fall back to the platform key otherwise.
     const secret =
-      this.config.get<string>('paystack.webhookSecret') || this.secretKey();
+      secretOverride?.trim() ||
+      this.config.get<string>('paystack.webhookSecret') ||
+      this.secretKey();
     if (!signature) return false;
     const computed = createHmac('sha512', secret)
       .update(typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8'))

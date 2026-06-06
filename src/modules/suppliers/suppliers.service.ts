@@ -105,9 +105,17 @@ export class SuppliersService {
     supplierId: string,
   ) {
     await this.findEntity(businessId, supplierId);
-    return this.ingredientRepo.find({
-      where: { supplierId },
-      take: 100,
-    });
+    // Match both the legacy single-supplier column AND the new simple-array
+    // multi-supplier column. supplierIds is stored as CSV by TypeORM's
+    // simple-array, so wrap it in commas before LIKE-matching the id.
+    return this.ingredientRepo
+      .createQueryBuilder('i')
+      .where('i.deletedAt IS NULL')
+      .andWhere(
+        "(i.supplierId = :sid OR (',' || i.supplierIds || ',') LIKE :pattern)",
+        { sid: supplierId, pattern: `%,${supplierId},%` },
+      )
+      .take(100)
+      .getMany();
   }
 }

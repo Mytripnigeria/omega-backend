@@ -19,6 +19,7 @@ import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import {
   CouponApplicableTo,
   CouponEntity,
+  CouponMethod,
   CouponType,
 } from '../entities/coupon.entity';
 
@@ -39,6 +40,11 @@ export class CreateCouponDto {
   @ApiProperty({ enum: CouponType })
   @IsEnum(CouponType)
   type: CouponType;
+
+  @ApiPropertyOptional({ enum: CouponMethod, default: CouponMethod.CODE })
+  @IsOptional()
+  @IsEnum(CouponMethod)
+  method?: CouponMethod;
 
   @ApiProperty({ example: 10, minimum: 0 })
   @IsNumber()
@@ -174,6 +180,10 @@ export class CouponResponseDto {
   @ApiProperty({ enum: CouponType })
   @Expose()
   type: CouponType;
+
+  @ApiProperty({ enum: CouponMethod, default: CouponMethod.CODE })
+  @Expose()
+  method: CouponMethod;
 
   @ApiProperty()
   @Expose()

@@ -5,7 +5,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { LoyaltyTierEntity } from './entities/loyalty-tier.entity';
+import { randomUUID } from 'crypto';
+import {
+  LoyaltyBenefit,
+  LoyaltyTierEntity,
+} from './entities/loyalty-tier.entity';
 import { LoyaltySettingsEntity } from './entities/loyalty-settings.entity';
 import { CustomerEntity } from '../customers/entities/customer.entity';
 import {
@@ -89,11 +93,26 @@ export class LoyaltyService {
     const tier = this.tierRepo.create({
       ...dto,
       businessId,
-      benefits: dto.benefits ?? [],
+      benefits: this.normalizeBenefits(dto.benefits),
       isActive: dto.isActive ?? true,
     });
     const saved = await this.tierRepo.save(tier);
     return LoyaltyTierResponseDto.from(saved, 0);
+  }
+
+  /** Stamp a UUID on benefits that arrive without one and coerce missing
+   *  description to an empty string — the frontend can omit both when
+   *  appending a new benefit row to a tier. */
+  private normalizeBenefits(
+    benefits: Partial<LoyaltyBenefit>[] | undefined,
+  ): LoyaltyBenefit[] {
+    if (!benefits) return [];
+    return benefits.map((b) => ({
+      id: b.id ?? randomUUID(),
+      type: b.type as LoyaltyBenefit['type'],
+      value: Number(b.value ?? 0),
+      description: b.description ?? '',
+    }));
   }
 
   async updateTier(
@@ -109,7 +128,7 @@ export class LoyaltyService {
       if (dup) throw new ConflictException(`Tier "${dto.name}" already exists`);
     }
     Object.assign(tier, dto);
-    if (dto.benefits) tier.benefits = dto.benefits;
+    if (dto.benefits) tier.benefits = this.normalizeBenefits(dto.benefits);
     const saved = await this.tierRepo.save(tier);
     const counts = await this.computeMemberCounts(businessId, [saved]);
     return LoyaltyTierResponseDto.from(saved, counts.get(saved.id) ?? 0);

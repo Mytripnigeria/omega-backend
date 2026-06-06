@@ -6,6 +6,7 @@ import {
   WalletTransactionEntity,
 } from './entities/wallet-transaction.entity';
 import { UserEntity } from '../users/entities/user.entity';
+import { LoyaltyTierEntity } from '../loyalty/entities/loyalty-tier.entity';
 import { CustomersService } from './customers.service';
 import { CustomersController } from './customers.controller';
 import { StorefrontCustomerController } from './storefront-customer.controller';
@@ -18,6 +19,7 @@ import { ActivityLogModule } from '../activity-log/activity-log.module';
       WalletTransactionEntity,
       PointsTransactionEntity,
       UserEntity,
+      LoyaltyTierEntity,
     ]),
     ActivityLogModule,
   ],

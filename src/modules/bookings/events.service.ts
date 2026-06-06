@@ -18,7 +18,13 @@ import { ActivityLogService } from '../activity-log/activity-log.service';
 import { AdminJwtPayload } from '../../common/types/jwt-payload.types';
 
 const VALID_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
-  [EventStatus.INQUIRY]: [EventStatus.PENDING, EventStatus.CANCELLED],
+  // An inquiry can be confirmed directly (the "pending" stage is optional —
+  // e.g. awaiting a deposit) so the Confirm action works straight off an inquiry.
+  [EventStatus.INQUIRY]: [
+    EventStatus.PENDING,
+    EventStatus.CONFIRMED,
+    EventStatus.CANCELLED,
+  ],
   [EventStatus.PENDING]: [EventStatus.CONFIRMED, EventStatus.CANCELLED],
   [EventStatus.CONFIRMED]: [
     EventStatus.IN_PROGRESS,

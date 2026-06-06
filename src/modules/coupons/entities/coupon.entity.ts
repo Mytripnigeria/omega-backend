@@ -15,6 +15,14 @@ export enum CouponType {
   FIXED = 'fixed',
 }
 
+export enum CouponMethod {
+  /** Applied to the price of each eligible product instantly — the customer
+   *  never has to type the code. */
+  AUTOMATIC = 'automatic',
+  /** Requires the customer to enter the code at checkout. */
+  CODE = 'code',
+}
+
 export type CouponApplicableTo =
   | 'all'
   | 'specific_products'
@@ -43,6 +51,15 @@ export class CouponEntity {
   @ApiProperty({ enum: CouponType })
   @Column({ type: 'enum', enum: CouponType, default: CouponType.PERCENTAGE })
   type: CouponType;
+
+  @ApiProperty({
+    enum: CouponMethod,
+    default: CouponMethod.CODE,
+    description:
+      'How this discount is applied. `automatic` discounts hit the price the moment the cart shows up; `code` discounts only kick in when the customer types the code at checkout.',
+  })
+  @Column({ type: 'enum', enum: CouponMethod, default: CouponMethod.CODE })
+  method: CouponMethod;
 
   @ApiProperty({
     example: 10,

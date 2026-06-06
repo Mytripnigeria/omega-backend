@@ -9,8 +9,12 @@ import { IngredientEntity } from '../ingredients/entities/ingredient.entity';
 import { ExpenseEntity } from '../expenses/entities/expense.entity';
 import { CustomerEntity } from '../customers/entities/customer.entity';
 import { CashSessionEntity } from '../cash-sessions/entities/cash-session.entity';
+import { ProductEntity } from '../products/entities/product.entity';
+import { CategoryEntity } from '../categories/entities/category.entity';
+import { IngredientMovementEntity } from '../ingredients/entities/ingredient-movement.entity';
 import { ReportsService } from './reports.service';
 import { ReportsController } from './reports.controller';
+import { ReportsExporter } from './reports.exporter';
 
 @Module({
   imports: [
@@ -24,10 +28,13 @@ import { ReportsController } from './reports.controller';
       ExpenseEntity,
       CustomerEntity,
       CashSessionEntity,
+      ProductEntity,
+      CategoryEntity,
+      IngredientMovementEntity,
     ]),
   ],
   controllers: [ReportsController],
-  providers: [ReportsService],
+  providers: [ReportsService, ReportsExporter],
   exports: [ReportsService],
 })
 export class ReportsModule {}

@@ -151,14 +151,20 @@ export class PaystackWebhookController {
     @Headers('x-paystack-signature') signature: string,
   ) {
     const raw = (req as unknown as { rawBody?: Buffer }).rawBody;
+    const data = body.data as { reference?: string } | undefined;
+    // Verify against the paying merchant's own Paystack secret (resolved from
+    // the order behind this reference), so events are validated tenant-by-tenant.
+    const merchantSecret = data?.reference
+      ? await this.storefrontOrders.paystackSecretForReference(data.reference)
+      : undefined;
     const valid = this.paystack.verifyWebhookSignature(
       raw ?? JSON.stringify(body),
       signature,
+      merchantSecret,
     );
     if (!valid) throw new BadRequestException('Invalid signature');
 
     const event = body.event as string | undefined;
-    const data = body.data as { reference?: string } | undefined;
     if (event === 'charge.success' && data?.reference) {
       await this.storefrontOrders.applyWebhookSuccess(data.reference);
     }

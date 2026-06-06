@@ -24,6 +24,7 @@ import { StorageModule } from './modules/storage/storage.module';
 import { BusinessModule } from './modules/business/business.module';
 import { TaxRatesModule } from './modules/tax-rates/tax-rates.module';
 import { PaymentMethodsModule } from './modules/payment-methods/payment-methods.module';
+import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { PrintersModule } from './modules/printers/printers.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { DomainsModule } from './modules/domains/domains.module';
@@ -40,6 +41,8 @@ import { InventoryLocationsModule } from './modules/inventory-locations/inventor
 import { StockTransfersModule } from './modules/stock-transfers/stock-transfers.module';
 import { EquipmentModule } from './modules/equipment/equipment.module';
 import { TablesModule } from './modules/tables/tables.module';
+import { ChecklistsModule } from './modules/checklists/checklists.module';
+import { KpiTargetsModule } from './modules/kpi-targets/kpi-targets.module';
 import { PushNotificationsModule } from './modules/push-notifications/push-notifications.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { BookingsModule } from './modules/bookings/bookings.module';
@@ -97,6 +100,7 @@ import { PayoutsModule } from './modules/payouts/payouts.module';
     StorageModule,
     TaxRatesModule,
     PaymentMethodsModule,
+    IntegrationsModule,
     PrintersModule,
     WebhooksModule,
     DomainsModule,
@@ -113,6 +117,8 @@ import { PayoutsModule } from './modules/payouts/payouts.module';
     StockTransfersModule,
     EquipmentModule,
     TablesModule,
+    ChecklistsModule,
+    KpiTargetsModule,
     PushNotificationsModule,
     SuppliersModule,
     BookingsModule,

@@ -15,6 +15,7 @@ import {
   WalletTransactionType,
 } from './entities/wallet-transaction.entity';
 import { UserEntity } from '../users/entities/user.entity';
+import { LoyaltyTierEntity } from '../loyalty/entities/loyalty-tier.entity';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { CustomerFilterDto } from './dto/customer-filter.dto';
@@ -47,6 +48,8 @@ export class CustomersService {
     private readonly walletRepo: Repository<WalletTransactionEntity>,
     @InjectRepository(PointsTransactionEntity)
     private readonly pointsRepo: Repository<PointsTransactionEntity>,
+    @InjectRepository(LoyaltyTierEntity)
+    private readonly loyaltyTierRepo: Repository<LoyaltyTierEntity>,
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
     private readonly ledger: FinancialTransactionsService,
@@ -54,6 +57,40 @@ export class CustomersService {
 
   private generateReferralCode(): string {
     return `REF-${randomBytes(4).toString('hex').toUpperCase()}`;
+  }
+
+  /** Picks the highest-threshold active tier the customer's points cover.
+   *  Returns null when no tiers are configured or none match (legacy enum
+   *  remains the fallback). */
+  private async resolveTier(
+    businessId: string,
+    points: number,
+  ): Promise<LoyaltyTierEntity | null> {
+    return this.loyaltyTierRepo
+      .createQueryBuilder('t')
+      .where('t.businessId = :businessId', { businessId })
+      .andWhere('t.isActive = TRUE')
+      .andWhere('t.minPoints <= :points', { points })
+      .orderBy('t.minPoints', 'DESC')
+      .getOne();
+  }
+
+  /** Resolves tier for each customer in a list using a single batch query. */
+  private async resolveTiersForList(
+    businessId: string,
+    customers: CustomerEntity[],
+  ): Promise<Map<string, LoyaltyTierEntity>> {
+    const tiers = await this.loyaltyTierRepo.find({
+      where: { businessId, isActive: true },
+      order: { minPoints: 'DESC' },
+    });
+    const byCustomer = new Map<string, LoyaltyTierEntity>();
+    if (tiers.length === 0) return byCustomer;
+    for (const c of customers) {
+      const matched = tiers.find((t) => Number(t.minPoints) <= Number(c.points));
+      if (matched) byCustomer.set(c.id, matched);
+    }
+    return byCustomer;
   }
 
   async findAll(
@@ -85,21 +122,35 @@ export class CustomersService {
 
     const [data, total] = await qb.getManyAndCount();
 
-    const userIds = await this.userRepo.find({
-      where: data.map((d) => ({ customerId: d.id })),
-      select: ['customerId'],
-    });
+    const userIds =
+      data.length > 0
+        ? await this.userRepo.find({
+            where: data.map((d) => ({ customerId: d.id })),
+            select: ['customerId'],
+          })
+        : [];
     const haveUser = new Set(userIds.map((u) => u.customerId));
+    const tierByCustomer = await this.resolveTiersForList(businessId, data);
 
-    return paginate(data, total, page, limit, (e) =>
-      CustomerResponseDto.from(e, { hasUserAccount: haveUser.has(e.id) }),
-    );
+    return paginate(data, total, page, limit, (e) => {
+      const tier = tierByCustomer.get(e.id);
+      return CustomerResponseDto.from(e, {
+        hasUserAccount: haveUser.has(e.id),
+        loyaltyTierId: tier?.id ?? null,
+        loyaltyTierName: tier?.name ?? null,
+      });
+    });
   }
 
   async findOne(businessId: string, id: string): Promise<CustomerResponseDto> {
     const customer = await this.findEntity(businessId, id);
     const user = await this.userRepo.findOne({ where: { customerId: id } });
-    return CustomerResponseDto.from(customer, { hasUserAccount: !!user });
+    const tier = await this.resolveTier(businessId, Number(customer.points));
+    return CustomerResponseDto.from(customer, {
+      hasUserAccount: !!user,
+      loyaltyTierId: tier?.id ?? null,
+      loyaltyTierName: tier?.name ?? null,
+    });
   }
 
   private async findEntity(businessId: string, id: string): Promise<CustomerEntity> {
@@ -152,7 +203,12 @@ export class CustomersService {
       metadata: { email: saved.email, phone: saved.phone },
     });
 
-    return CustomerResponseDto.from(saved, { hasUserAccount: false });
+    const tier = await this.resolveTier(actor.businessId, Number(saved.points));
+    return CustomerResponseDto.from(saved, {
+      hasUserAccount: false,
+      loyaltyTierId: tier?.id ?? null,
+      loyaltyTierName: tier?.name ?? null,
+    });
   }
 
   async update(
@@ -176,7 +232,12 @@ export class CustomersService {
     });
 
     const user = await this.userRepo.findOne({ where: { customerId: id } });
-    return CustomerResponseDto.from(saved, { hasUserAccount: !!user });
+    const tier = await this.resolveTier(actor.businessId, Number(saved.points));
+    return CustomerResponseDto.from(saved, {
+      hasUserAccount: !!user,
+      loyaltyTierId: tier?.id ?? null,
+      loyaltyTierName: tier?.name ?? null,
+    });
   }
 
   async remove(actor: CustomerActor, id: string): Promise<void> {

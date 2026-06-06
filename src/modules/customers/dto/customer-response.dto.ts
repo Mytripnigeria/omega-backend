@@ -76,9 +76,30 @@ export class CustomerResponseDto {
   @Expose()
   points: number;
 
-  @ApiProperty({ enum: LoyaltyTier })
+  @ApiProperty({
+    enum: LoyaltyTier,
+    deprecated: true,
+    description:
+      'Legacy fixed-threshold tier (bronze/silver/gold/platinum). Use `loyaltyTierName` for the merchant-configured tier when present.',
+  })
   @Expose()
   loyaltyTier: LoyaltyTier;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description:
+      'The merchant-configured loyalty tier the customer falls into based on their points balance. Null when no tiers are configured for the business or no tier matches.',
+  })
+  @Expose()
+  loyaltyTierId: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Resolved tier name, e.g. "Silver".',
+  })
+  @Expose()
+  loyaltyTierName: string | null;
 
   @ApiProperty({ type: [String] })
   @Expose()
@@ -125,7 +146,11 @@ export class CustomerResponseDto {
 
   static from(
     entity: CustomerEntity,
-    extras: { hasUserAccount?: boolean } = {},
+    extras: {
+      hasUserAccount?: boolean;
+      loyaltyTierId?: string | null;
+      loyaltyTierName?: string | null;
+    } = {},
   ): CustomerResponseDto {
     return plainToInstance(
       CustomerResponseDto,
@@ -134,6 +159,8 @@ export class CustomerResponseDto {
         walletBalance: Number(entity.walletBalance),
         totalSpent: Number(entity.totalSpent),
         hasUserAccount: extras.hasUserAccount ?? false,
+        loyaltyTierId: extras.loyaltyTierId ?? null,
+        loyaltyTierName: extras.loyaltyTierName ?? null,
       },
       { excludeExtraneousValues: true },
     );
