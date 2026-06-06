@@ -18,7 +18,9 @@ import { KpiTargetEntity } from './kpi-target.entity';
  *  OrderEntity at read time. */
 @Entity('kpi_performances')
 @Unique(['kpiTargetId', 'staffId'])
-@Index(['kpiTargetId'])
+// Note: the index on kpiTargetId is declared once on the column below
+// (@Index()). A duplicate class-level @Index(['kpiTargetId']) was removed —
+// it generated a second identical index and broke schema sync.
 export class KpiPerformanceEntity {
   @ApiProperty({ format: 'uuid' })
   @PrimaryGeneratedColumn('uuid')
