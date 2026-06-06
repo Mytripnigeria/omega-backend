@@ -7,7 +7,9 @@ import helmet from 'helmet';
 import { json, raw } from 'express';
 import { AppModule } from './app.module';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
+import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { requestIdMiddleware } from './common/middleware/request-context';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -19,6 +21,10 @@ async function bootstrap() {
   // Paystack webhook needs the *raw* body for HMAC signature verification.
   // Mount the raw parser only on that path before the global JSON parser
   // touches it; everything else uses the standard JSON body parser.
+  // Assign a correlation id to every request first, so it's available to all
+  // downstream logging (access logs + error logs).
+  app.use(requestIdMiddleware);
+
   app.use('/api/webhooks/paystack', raw({ type: '*/*' }));
   app.use(json({ limit: '5mb' }));
 
@@ -51,7 +57,7 @@ async function bootstrap() {
     }),
   );
 
-  app.useGlobalInterceptors(new TransformInterceptor());
+  app.useGlobalInterceptors(new LoggingInterceptor(), new TransformInterceptor());
   app.useGlobalFilters(new HttpExceptionFilter());
 
   if (nodeEnv !== 'production') {
