@@ -22,6 +22,8 @@ import { CategoryEntity } from '../modules/categories/entities/category.entity';
         synchronize: config.get<boolean>('database.synchronize'),
         logging: config.get<boolean>('database.logging'),
         entities: [__dirname + '/../**/*.entity{.ts,.js}'],
+        migrations: [__dirname + '/migrations/*{.ts,.js}'],
+        migrationsRun: config.get<boolean>('database.migrationsRun'),
         autoLoadEntities: true,
       }),
     }),

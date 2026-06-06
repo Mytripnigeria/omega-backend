@@ -7,6 +7,9 @@ export default () => ({
     password: process.env.DB_PASSWORD ?? 'postgres',
     database: process.env.DB_DATABASE ?? 'mrjollof_db',
     synchronize: process.env.DB_SYNC === 'true',
+    // Auto-run pending migrations on boot. Opt-in; default off so a deploy
+    // applies schema changes via an explicit `npm run migration:run` step.
+    migrationsRun: process.env.DB_MIGRATIONS_RUN === 'true',
     logging: process.env.DB_LOGGING === 'true',
   },
   jwt: {

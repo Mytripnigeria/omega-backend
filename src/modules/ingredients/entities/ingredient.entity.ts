@@ -42,7 +42,7 @@ export class IngredientEntity {
     deprecated: true,
     description: 'Legacy single-supplier reference. Use `supplierIds` instead; this is kept for backward compatibility and mirrors `supplierIds[0]` on write.',
   })
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   supplierId!: string | null;
 
   @ApiPropertyOptional({
@@ -54,7 +54,7 @@ export class IngredientEntity {
   supplierIds!: string[] | null;
 
   @ApiPropertyOptional({ example: 'RI-LG-001', nullable: true })
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   sku!: string | null;
 
   @ApiProperty({ format: 'uuid', example: 'c2d3e4f5-1234-4f1a-8c3e-9a4f0c4e2b21' })
