@@ -66,7 +66,9 @@ export class ShiftsController {
     },
   })
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard)
+  // Readable by staff too: the workstation lists shifts (e.g. to find the
+  // active shift to clock in/out of). Mutations below stay admin-only.
+  @UseGuards(JwtOrStaffGuard)
   @Get()
   findAll(@Query() filter: ShiftFilterDto) {
     return this.shiftsService.findAll(filter);
@@ -76,7 +78,7 @@ export class ShiftsController {
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: ShiftResponseDto })
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrStaffGuard)
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.shiftsService.findOne(id);
