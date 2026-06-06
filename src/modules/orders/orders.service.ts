@@ -39,6 +39,13 @@ import { TransactionMethod } from '../financial-transactions/entities/financial-
 import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.service';
 import { TableEntity, TableStatus } from '../tables/entities/table.entity';
 import { PushService } from '../push-notifications/push.service';
+import { ProductIngredientEntity } from '../products/entities/product-ingredient.entity';
+import { IngredientEntity } from '../ingredients/entities/ingredient.entity';
+import {
+  IngredientMovementEntity,
+  MovementType,
+} from '../ingredients/entities/ingredient-movement.entity';
+import { IngredientLocationStockEntity } from '../ingredients/entities/ingredient-location-stock.entity';
 
 const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PENDING]: [OrderStatus.PREPARING, OrderStatus.CANCELLED],
@@ -70,6 +77,8 @@ export class OrdersService {
     private readonly eventRepo: Repository<OrderStatusEventEntity>,
     @InjectRepository(TableEntity)
     private readonly tableRepo: Repository<TableEntity>,
+    @InjectRepository(ProductIngredientEntity)
+    private readonly productIngredientRepo: Repository<ProductIngredientEntity>,
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
     private readonly customersService: CustomersService,
@@ -79,6 +88,102 @@ export class OrdersService {
     private readonly merchantWallet: MerchantWalletService,
     private readonly pushService: PushService,
   ) {}
+
+  /**
+   * Deducts each order item's recipe ingredients from inventory and records
+   * a CONSUMPTION movement per ingredient, so the merchant hub history view
+   * shows what each completed order consumed. Idempotent in practice — we
+   * only call this on the transition into COMPLETED, and the status state
+   * machine forbids re-entering COMPLETED. If an ingredient has per-location
+   * stock rows, we debit the location holding the most stock (best effort:
+   * orders don't carry a location context).
+   */
+  private async consumeIngredientsForOrder(
+    m: import('typeorm').EntityManager,
+    order: OrderEntity,
+    actor: ActorContext,
+  ): Promise<void> {
+    const items = await m.getRepository(OrderItemEntity).find({
+      where: { orderId: order.id },
+    });
+    if (items.length === 0) return;
+
+    // Sum required quantity per ingredient across all order items.
+    const productIds = Array.from(
+      new Set(items.map((i) => i.productId).filter((id): id is string => !!id)),
+    );
+    if (productIds.length === 0) return;
+
+    const recipes = await m.getRepository(ProductIngredientEntity).find({
+      where: productIds.map((id) => ({ productId: id })),
+    });
+    if (recipes.length === 0) return;
+
+    const recipesByProduct = new Map<string, ProductIngredientEntity[]>();
+    for (const r of recipes) {
+      const list = recipesByProduct.get(r.productId) ?? [];
+      list.push(r);
+      recipesByProduct.set(r.productId, list);
+    }
+
+    const required = new Map<string, number>();
+    for (const item of items) {
+      if (!item.productId) continue;
+      const recipe = recipesByProduct.get(item.productId);
+      if (!recipe) continue;
+      const qty = Number(item.quantity);
+      for (const r of recipe) {
+        const need = qty * Number(r.quantity);
+        required.set(r.ingredientId, (required.get(r.ingredientId) ?? 0) + need);
+      }
+    }
+    if (required.size === 0) return;
+
+    const ingredientRepo = m.getRepository(IngredientEntity);
+    const movementRepo = m.getRepository(IngredientMovementEntity);
+    const locationStockRepo = m.getRepository(IngredientLocationStockEntity);
+
+    for (const [ingredientId, need] of required) {
+      const ing = await ingredientRepo.findOne({ where: { id: ingredientId } });
+      if (!ing) continue;
+
+      const previousStock = Number(ing.currentStock);
+      const newStock = previousStock - need;
+
+      // Pick the location row holding the most stock; orders don't bind to a
+      // specific location, so this is the most defensible heuristic.
+      const locationRows = await locationStockRepo.find({
+        where: { ingredientId },
+      });
+      if (locationRows.length > 0) {
+        locationRows.sort(
+          (a, b) => Number(b.currentStock) - Number(a.currentStock),
+        );
+        const target = locationRows[0];
+        target.currentStock = Number(target.currentStock) - need;
+        await locationStockRepo.save(target);
+      }
+
+      ing.currentStock = newStock;
+      await ingredientRepo.save(ing);
+
+      await movementRepo.save(
+        movementRepo.create({
+          ingredientId,
+          storeId: ing.storeId,
+          staffId: actor.sub_type === 'staff' ? actor.sub : null,
+          staffName: actor.actorName ?? null,
+          type: MovementType.CONSUMPTION,
+          quantity: -need,
+          previousStock,
+          newStock,
+          reason: `Order #${order.orderNumber}`,
+          referenceType: 'order',
+          referenceId: order.id,
+        }),
+      );
+    }
+  }
 
   /**
    * Best-effort customer push notification on order status changes. Never
@@ -412,6 +517,11 @@ export class OrdersService {
           actorType: actor.sub_type,
         }),
       );
+      // Auto-deduct recipe ingredients from inventory on completion. Runs
+      // inside the same tx so an ingredient failure rolls the status back.
+      if (dto.status === OrderStatus.COMPLETED) {
+        await this.consumeIngredientsForOrder(m, order, actor);
+      }
     });
 
     // Free the seated table when the order reaches a terminal state.
@@ -674,6 +784,7 @@ export class OrdersService {
       if (dto.paymentMethodId) order.paymentMethodId = dto.paymentMethodId;
       if (dto.paymentChannel) order.paymentChannel = dto.paymentChannel;
       if (dto.paymentReference) order.paymentReference = dto.paymentReference;
+      const wasNotCompleted = order.status !== OrderStatus.COMPLETED;
       if (Number(order.paidAmount) >= Number(order.total)) {
         order.paidAt = new Date();
         order.paymentStatus = 'paid';
@@ -682,6 +793,12 @@ export class OrdersService {
         }
       }
       await m.save(order);
+
+      // If this payment was the trigger that closed out the order, deduct
+      // recipe ingredients from inventory now (same tx as the order save).
+      if (wasNotCompleted && order.status === OrderStatus.COMPLETED) {
+        await this.consumeIngredientsForOrder(m, order, actor);
+      }
 
       await this.ledger.record(
         {

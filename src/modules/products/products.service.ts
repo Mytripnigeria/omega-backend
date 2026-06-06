@@ -83,8 +83,18 @@ export class ProductsService {
     if (status !== undefined) where.status = status;
     if (search) where.name = Like(`%${search}%`);
 
+    // Load relations on the list endpoint too — the merchant-hub Products
+    // page needs variations, ingredients, and addon groups when opening the
+    // edit sheet for a row. Without them the form fields show empty.
     const [data, total] = await this.productRepo.findAndCount({
       where,
+      relations: [
+        'variations',
+        'productIngredients',
+        'productIngredients.ingredient',
+        'addonGroups',
+        'addonGroups.addons',
+      ],
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,

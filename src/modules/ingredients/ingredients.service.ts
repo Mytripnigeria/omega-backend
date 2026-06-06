@@ -7,11 +7,15 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository, FindOptionsWhere } from 'typeorm';
 import { IngredientEntity } from './entities/ingredient.entity';
+import { IngredientLocationStockEntity } from './entities/ingredient-location-stock.entity';
 import {
   IngredientMovementEntity,
   MovementType,
 } from './entities/ingredient-movement.entity';
-import { CreateIngredientDto } from './dto/create-ingredient.dto';
+import {
+  CreateIngredientDto,
+  InitialLocationStockDto,
+} from './dto/create-ingredient.dto';
 import { UpdateIngredientDto } from './dto/update-ingredient.dto';
 import { FilterIngredientDto } from './dto/filter-ingredient.dto';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
@@ -35,33 +39,144 @@ export class IngredientsService {
     private readonly ingredientRepo: Repository<IngredientEntity>,
     @InjectRepository(IngredientMovementEntity)
     private readonly movementRepo: Repository<IngredientMovementEntity>,
+    @InjectRepository(IngredientLocationStockEntity)
+    private readonly locationStockRepo: Repository<IngredientLocationStockEntity>,
     private readonly dataSource: DataSource,
   ) {}
 
+  /**
+   * Recomputes the ingredient's denormalized aggregate fields from its
+   * per-location stock rows. Called whenever per-location stock changes so
+   * legacy reads of `IngredientEntity.currentStock` / `minStock` stay correct
+   * without us having to touch every consumer.
+   *
+   *  - `currentStock` = sum of per-location currentStock
+   *  - `minStock`     = sum of per-location minStock
+   *  - `expiryDate`   = earliest per-location expiry (or null if none)
+   *
+   * No-op when the ingredient has no location rows (legacy / single-location
+   * ingredients keep their existing aggregate fields untouched).
+   */
+  private async recomputeAggregate(
+    m: EntityManager,
+    ingredientId: string,
+  ): Promise<void> {
+    const repo = m.getRepository(IngredientLocationStockEntity);
+    const rows = await repo.find({ where: { ingredientId } });
+    if (rows.length === 0) return;
+    const sumStock = rows.reduce((a, r) => a + Number(r.currentStock), 0);
+    const sumMin = rows.reduce((a, r) => a + Number(r.minStock), 0);
+    const expiries = rows
+      .map((r) => r.expiryDate)
+      .filter((e): e is string => !!e)
+      .sort();
+    await m.getRepository(IngredientEntity).update(ingredientId, {
+      currentStock: sumStock,
+      minStock: sumMin,
+      expiryDate: expiries.length > 0 ? expiries[0] : null,
+    });
+  }
+
+  /** Hydrates a list of ingredients with their per-location stock rows in one
+   * round-trip (IN query keyed by ingredient ids). */
+  private async attachLocations(
+    ingredients: IngredientEntity[],
+  ): Promise<(IngredientEntity & { locations: IngredientLocationStockEntity[] })[]> {
+    if (ingredients.length === 0) return [];
+    const ids = ingredients.map((i) => i.id);
+    const stocks = await this.locationStockRepo.find({
+      where: ids.map((id) => ({ ingredientId: id })),
+    });
+    const byIngredient = new Map<string, IngredientLocationStockEntity[]>();
+    for (const s of stocks) {
+      const list = byIngredient.get(s.ingredientId) ?? [];
+      list.push(s);
+      byIngredient.set(s.ingredientId, list);
+    }
+    return ingredients.map((i) =>
+      Object.assign(i, { locations: byIngredient.get(i.id) ?? [] }),
+    );
+  }
+
   async create(dto: CreateIngredientDto): Promise<IngredientResponseDto> {
-    const ingredient = this.ingredientRepo.create(dto);
-    const saved = await this.ingredientRepo.save(ingredient);
-    return IngredientResponseDto.from(saved);
+    return this.dataSource.transaction(async (m) => {
+      // Multi-supplier: keep the legacy single `supplierId` mirrored to the
+      // first of `supplierIds` so any code still reading the old field stays
+      // correct without a separate migration.
+      const supplierIds = dto.supplierIds ?? (dto.supplierId ? [dto.supplierId] : []);
+      const supplierId = supplierIds[0] ?? dto.supplierId ?? null;
+
+      const ingredientRepo = m.getRepository(IngredientEntity);
+      const ingredient = ingredientRepo.create({
+        name: dto.name,
+        unit: dto.unit,
+        currentStock: dto.currentStock ?? 0,
+        minStock: dto.minStock ?? 0,
+        costPerUnit: dto.costPerUnit ?? 0,
+        supplierId,
+        supplierIds: supplierIds.length > 0 ? supplierIds : null,
+        sku: dto.sku ?? null,
+        storeId: dto.storeId,
+        lastRestocked: dto.lastRestocked ? new Date(dto.lastRestocked) : null,
+        expiryDate: dto.expiryDate ?? null,
+      });
+      const saved = await ingredientRepo.save(ingredient);
+
+      if (dto.locations && dto.locations.length > 0) {
+        const stockRepo = m.getRepository(IngredientLocationStockEntity);
+        const rows = dto.locations.map((loc) =>
+          stockRepo.create({
+            ingredientId: saved.id,
+            locationId: loc.locationId,
+            storeId: dto.storeId,
+            currentStock: loc.currentStock ?? 0,
+            minStock: loc.minStock ?? 0,
+            expiryDate: loc.expiryDate ?? null,
+            lastRestocked: loc.currentStock && loc.currentStock > 0 ? new Date() : null,
+          }),
+        );
+        await stockRepo.save(rows);
+        await this.recomputeAggregate(m, saved.id);
+      }
+
+      const withLocations = await this.attachLocations([
+        (await ingredientRepo.findOne({ where: { id: saved.id } }))!,
+      ]);
+      return IngredientResponseDto.from(withLocations[0]);
+    });
   }
 
   async findAll(query: FilterIngredientDto): Promise<PaginatedResponseDto<IngredientResponseDto>> {
-    const { page = 1, limit = 20, storeId, search, status } = query;
+    const { page = 1, limit = 20, storeId, locationId, search, status } = query;
 
     const qb = this.ingredientRepo.createQueryBuilder('i');
     if (storeId) qb.andWhere('i.storeId = :storeId', { storeId });
     if (search) qb.andWhere('i.name ILIKE :search', { search: `%${search}%` });
     if (status === 'low') qb.andWhere('i.currentStock <= i.minStock');
+    if (locationId) {
+      // Only return ingredients with a stock entry at the selected location.
+      // INNER JOIN keeps the pagination math correct vs a LEFT JOIN.
+      qb.innerJoin(
+        IngredientLocationStockEntity,
+        'ls',
+        'ls.ingredientId = i.id AND ls.locationId = :locationId',
+        { locationId },
+      );
+    }
 
     qb.orderBy('i.name', 'ASC')
       .skip((page - 1) * limit)
       .take(limit);
 
     const [data, total] = await qb.getManyAndCount();
-    return paginate(data, total, page, limit, IngredientResponseDto.from);
+    const hydrated = await this.attachLocations(data);
+    return paginate(hydrated, total, page, limit, IngredientResponseDto.from);
   }
 
   async findOne(id: string): Promise<IngredientResponseDto> {
-    return IngredientResponseDto.from(await this.findEntity(id));
+    const ingredient = await this.findEntity(id);
+    const [hydrated] = await this.attachLocations([ingredient]);
+    return IngredientResponseDto.from(hydrated);
   }
 
   private async findEntity(id: string): Promise<IngredientEntity> {
@@ -120,9 +235,82 @@ export class IngredientsService {
 
   async update(id: string, dto: UpdateIngredientDto): Promise<IngredientResponseDto> {
     const ingredient = await this.findEntity(id);
-    Object.assign(ingredient, dto);
+    // Keep the legacy single `supplierId` in lock-step with `supplierIds[0]`
+    // whenever the caller updates the multi-supplier list.
+    if (dto.supplierIds !== undefined) {
+      ingredient.supplierIds = dto.supplierIds.length > 0 ? dto.supplierIds : null;
+      ingredient.supplierId = dto.supplierIds[0] ?? null;
+    } else if (dto.supplierId !== undefined) {
+      ingredient.supplierId = dto.supplierId;
+      ingredient.supplierIds = dto.supplierId ? [dto.supplierId] : null;
+    }
+    // Apply the rest of the patch (skip the supplier fields we just handled
+    // and the `locations` field which has its own endpoint).
+    const { supplierId: _s1, supplierIds: _s2, locations: _s3, ...rest } = dto;
+    void _s1;
+    void _s2;
+    void _s3;
+    Object.assign(ingredient, rest);
     const saved = await this.ingredientRepo.save(ingredient);
-    return IngredientResponseDto.from(saved);
+    const [hydrated] = await this.attachLocations([saved]);
+    return IngredientResponseDto.from(hydrated);
+  }
+
+  /** Lists per-location stock for an ingredient. */
+  async listLocationStocks(ingredientId: string) {
+    await this.findEntity(ingredientId);
+    return this.locationStockRepo.find({
+      where: { ingredientId },
+      order: { createdAt: 'ASC' },
+    });
+  }
+
+  /**
+   * Upserts the per-location stock row for an ingredient × location pair.
+   * Recomputes the ingredient's aggregate fields after the write.
+   */
+  async setLocationStock(
+    ingredientId: string,
+    locationId: string,
+    dto: Partial<InitialLocationStockDto>,
+  ): Promise<IngredientResponseDto> {
+    const ingredient = await this.findEntity(ingredientId);
+    await this.dataSource.transaction(async (m) => {
+      const repo = m.getRepository(IngredientLocationStockEntity);
+      let row = await repo.findOne({
+        where: { ingredientId, locationId },
+      });
+      if (!row) {
+        row = repo.create({
+          ingredientId,
+          locationId,
+          storeId: ingredient.storeId,
+          currentStock: 0,
+          minStock: 0,
+        });
+      }
+      if (dto.currentStock !== undefined) row.currentStock = dto.currentStock;
+      if (dto.minStock !== undefined) row.minStock = dto.minStock;
+      if (dto.expiryDate !== undefined) row.expiryDate = dto.expiryDate ?? null;
+      await repo.save(row);
+      await this.recomputeAggregate(m, ingredientId);
+    });
+    return this.findOne(ingredientId);
+  }
+
+  /** Removes a per-location stock row and recomputes the aggregate. */
+  async removeLocationStock(
+    ingredientId: string,
+    locationId: string,
+  ): Promise<void> {
+    await this.findEntity(ingredientId);
+    await this.dataSource.transaction(async (m) => {
+      await m.getRepository(IngredientLocationStockEntity).delete({
+        ingredientId,
+        locationId,
+      });
+      await this.recomputeAggregate(m, ingredientId);
+    });
   }
 
   async remove(id: string): Promise<void> {
@@ -141,22 +329,59 @@ export class IngredientsService {
     id: string,
     dto: AdjustStockDto & { type?: MovementType },
   ): Promise<IngredientResponseDto> {
-    const saved = await this.dataSource.transaction(async (m) => {
-      const repo = m.getRepository(IngredientEntity);
-      const ingredient = await repo.findOne({ where: { id } });
+    await this.dataSource.transaction(async (m) => {
+      const ingredientRepo = m.getRepository(IngredientEntity);
+      const stockRepo = m.getRepository(IngredientLocationStockEntity);
+      const ingredient = await ingredientRepo.findOne({ where: { id } });
       if (!ingredient) throw new NotFoundException(`Ingredient ${id} not found`);
 
-      const previous = Number(ingredient.currentStock);
-      const next = previous + dto.adjustment;
-      ingredient.currentStock = next;
-      if (dto.adjustment > 0) ingredient.lastRestocked = new Date();
-      // Receiving new stock can refresh the best-before date for the batch.
-      // We intentionally only honour expiryDate on intake (positive adjustment)
-      // to avoid silently rewriting expiry from waste/correction flows.
-      if (dto.adjustment > 0 && dto.expiryDate) {
-        ingredient.expiryDate = dto.expiryDate;
+      // Pick the target location: caller-specified, or the only location if
+      // the ingredient has exactly one. Legacy ingredients with no location
+      // rows fall through to direct aggregate adjustment (back-compat).
+      const locationRows = await stockRepo.find({ where: { ingredientId: id } });
+      let targetRow: IngredientLocationStockEntity | null = null;
+      if (locationRows.length > 0) {
+        if (dto.locationId) {
+          targetRow = locationRows.find((r) => r.locationId === dto.locationId) ?? null;
+          if (!targetRow) {
+            throw new BadRequestException(
+              `Ingredient is not stocked at location ${dto.locationId}`,
+            );
+          }
+        } else if (locationRows.length === 1) {
+          targetRow = locationRows[0];
+        } else {
+          throw new BadRequestException(
+            'This ingredient is stocked at multiple locations — specify `locationId`.',
+          );
+        }
       }
-      const after = await repo.save(ingredient);
+
+      let previous: number;
+      let next: number;
+      if (targetRow) {
+        previous = Number(targetRow.currentStock);
+        next = previous + dto.adjustment;
+        targetRow.currentStock = next;
+        if (dto.adjustment > 0) targetRow.lastRestocked = new Date();
+        if (dto.adjustment > 0 && dto.expiryDate) {
+          targetRow.expiryDate = dto.expiryDate;
+        }
+        await stockRepo.save(targetRow);
+        await this.recomputeAggregate(m, id);
+      } else {
+        // Legacy path — no per-location rows. Adjust the aggregate directly
+        // so existing ingredients (and their consumers) keep working until
+        // the merchant migrates them onto the multi-location model.
+        previous = Number(ingredient.currentStock);
+        next = previous + dto.adjustment;
+        ingredient.currentStock = next;
+        if (dto.adjustment > 0) ingredient.lastRestocked = new Date();
+        if (dto.adjustment > 0 && dto.expiryDate) {
+          ingredient.expiryDate = dto.expiryDate;
+        }
+        await ingredientRepo.save(ingredient);
+      }
 
       const movementType =
         dto.type ??
@@ -175,11 +400,66 @@ export class IngredientsService {
           reason: dto.reason ?? null,
         }),
       );
-
-      return after;
     });
 
-    return IngredientResponseDto.from(saved);
+    return this.findOne(id);
+  }
+
+  /**
+   * Atomically moves stock for one ingredient between two of its locations.
+   * Used by the stock-transfers module when a transfer is received so the
+   * source location is debited and the destination credited. Aggregates are
+   * unchanged (sum is preserved) but the per-location split shifts.
+   *
+   * Can be invoked inside an existing transaction (`txManager`) so a transfer
+   * receipt + per-line credit/debit can roll back together.
+   */
+  async transferBetweenLocations(
+    ingredientId: string,
+    fromLocationId: string,
+    toLocationId: string,
+    quantity: number,
+    txManager?: EntityManager,
+  ): Promise<void> {
+    if (quantity <= 0) throw new BadRequestException('Quantity must be positive');
+    if (fromLocationId === toLocationId) {
+      throw new BadRequestException('Source and destination locations must differ');
+    }
+    const run = async (m: EntityManager) => {
+      const stockRepo = m.getRepository(IngredientLocationStockEntity);
+      const fromRow = await stockRepo.findOne({
+        where: { ingredientId, locationId: fromLocationId },
+      });
+      if (!fromRow) {
+        throw new BadRequestException(
+          `Ingredient ${ingredientId} has no stock at location ${fromLocationId}`,
+        );
+      }
+      if (Number(fromRow.currentStock) < quantity) {
+        throw new BadRequestException('Insufficient stock at source location');
+      }
+      let toRow = await stockRepo.findOne({
+        where: { ingredientId, locationId: toLocationId },
+      });
+      if (!toRow) {
+        toRow = stockRepo.create({
+          ingredientId,
+          locationId: toLocationId,
+          storeId: fromRow.storeId,
+          currentStock: 0,
+          minStock: 0,
+        });
+      }
+      fromRow.currentStock = Number(fromRow.currentStock) - quantity;
+      toRow.currentStock = Number(toRow.currentStock) + quantity;
+      toRow.lastRestocked = new Date();
+      await stockRepo.save([fromRow, toRow]);
+      // Aggregate sum is preserved by definition; still recompute so the
+      // earliest-expiry rollup stays in sync.
+      await this.recomputeAggregate(m, ingredientId);
+    };
+    if (txManager) await run(txManager);
+    else await this.dataSource.transaction(run);
   }
 
   /**

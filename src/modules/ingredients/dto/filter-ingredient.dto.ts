@@ -1,4 +1,4 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString, IsUUID } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 
@@ -7,6 +7,15 @@ export class FilterIngredientDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   storeId?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Filter to ingredients that have a stock entry at this inventory location.',
+  })
+  @IsOptional()
+  @IsUUID()
+  locationId?: string;
 
   @ApiPropertyOptional({ example: 'Rice', description: 'Search by ingredient name or SKU' })
   @IsOptional()

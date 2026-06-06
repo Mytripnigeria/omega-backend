@@ -65,7 +65,27 @@ export class CategoriesService {
       take: limit,
     });
 
-    return paginate(data, total, page, limit, CategoryResponseDto.from);
+    // Annotate each row with its product count. Single grouped query bounded
+    // by this page's category ids, then merged onto the entities.
+    const ids = data.map((c) => c.id);
+    const counts = new Map<string, number>();
+    if (ids.length > 0) {
+      const rows = await this.categoryRepo.manager
+        .createQueryBuilder()
+        .select('p.categoryId', 'categoryId')
+        .addSelect('COUNT(p.id)', 'count')
+        .from('products', 'p')
+        .where('p.categoryId IN (:...ids)', { ids })
+        .andWhere('p.deletedAt IS NULL')
+        .groupBy('p.categoryId')
+        .getRawMany<{ categoryId: string; count: string }>();
+      for (const row of rows) counts.set(row.categoryId, parseInt(row.count, 10));
+    }
+
+    const enriched = data.map((c) =>
+      Object.assign(c, { productCount: counts.get(c.id) ?? 0 }),
+    );
+    return paginate(enriched, total, page, limit, CategoryResponseDto.from);
   }
 
   async findOne(businessId: string, id: string): Promise<CategoryResponseDto> {

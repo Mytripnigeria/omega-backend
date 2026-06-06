@@ -9,9 +9,13 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import { AdminEntity } from '../admin/entities/admin.entity';
+import { BusinessEntity } from '../business/entities/business.entity';
+import { StoreEntity } from '../store/entities/store.entity';
+import { AdminRegisterDto } from './dto/admin-register.dto';
 import { AdminService } from '../admin/admin.service';
 import { StaffService } from '../staff/staff.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
@@ -91,7 +95,100 @@ export class AuthService {
     private readonly phoneOtpRepo: Repository<PhoneOtpEntity>,
     @Inject(SmsService)
     private readonly smsService: SmsService,
+    private readonly dataSource: DataSource,
   ) {}
+
+  /**
+   * Self-signup for a new merchant. Creates the Business, Admin (password is
+   * hashed by AdminEntity's @BeforeInsert hook on save), and the first Store
+   * in one transaction, then issues admin tokens — the returned shape matches
+   * {@link adminLogin} so the merchant-hub can auto-login the new admin.
+   */
+  async adminRegister(dto: AdminRegisterDto) {
+    const existing = await this.adminService.findByEmail(dto.email);
+    if (existing) {
+      throw new ConflictException('An account with this email already exists');
+    }
+
+    const savedAdmin = await this.dataSource.transaction(async (manager) => {
+      const businessRepo = manager.getRepository(BusinessEntity);
+      const business = businessRepo.create({
+        name: dto.businessName,
+        currency: dto.currency ?? 'NGN',
+      });
+      const savedBusiness = await businessRepo.save(business);
+
+      const adminRepo = manager.getRepository(AdminEntity);
+      const admin = adminRepo.create({
+        businessId: savedBusiness.id,
+        fullName: dto.fullName,
+        email: dto.email,
+        password: dto.password, // hashed by AdminEntity @BeforeInsert
+        phone: dto.phone,
+        role: 'owner',
+        isActive: true,
+      });
+      const adminRow = await adminRepo.save(admin);
+
+      const storeRepo = manager.getRepository(StoreEntity);
+      const store = storeRepo.create({
+        businessId: savedBusiness.id,
+        name: dto.storeName,
+        address: dto.storeAddress,
+        phone: dto.storePhone || dto.phone || '',
+        email: dto.storeEmail || dto.email,
+        city: dto.storeCity ?? undefined,
+        state: dto.storeState ?? undefined,
+      });
+      await storeRepo.save(store);
+
+      return adminRow;
+    });
+
+    const payload: AdminJwtPayload = {
+      sub: savedAdmin.id,
+      sub_type: 'admin',
+      email: savedAdmin.email,
+      businessId: savedAdmin.businessId,
+    };
+    const accessToken = this.jwtService.sign(payload, {
+      secret: this.configService.get<string>('jwt.secret') as string,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expiresIn: this.configService.get('jwt.expiresIn') as any,
+    });
+    const refreshToken = this.jwtService.sign(payload, {
+      secret: this.configService.get<string>('jwt.refreshSecret') as string,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expiresIn: this.configService.get('jwt.refreshExpiresIn') as any,
+    });
+    const saltRounds = this.configService.get<number>('bcryptSaltRounds') ?? 10;
+    const hashedRefresh = await bcrypt.hash(refreshToken, saltRounds);
+    await this.adminService.updateRefreshToken(savedAdmin.id, hashedRefresh);
+
+    this.activityLog.record({
+      actorType: 'admin',
+      actorId: savedAdmin.id,
+      actorName: savedAdmin.fullName,
+      action: 'admin.registered',
+      businessId: savedAdmin.businessId,
+      resourceType: 'admin',
+      resourceId: savedAdmin.id,
+    });
+
+    return {
+      accessToken,
+      refreshToken,
+      admin: {
+        id: savedAdmin.id,
+        businessId: savedAdmin.businessId,
+        fullName: savedAdmin.fullName,
+        email: savedAdmin.email,
+        role: savedAdmin.role,
+        avatarUrl: savedAdmin.avatarUrl,
+        twoFactorEnabled: savedAdmin.twoFactorEnabled,
+      },
+    };
+  }
 
   async adminLogin(dto: AdminLoginDto) {
     const admin = await this.adminService.findByEmail(dto.email);

@@ -47,6 +47,10 @@ export class CategoryResponseDto {
   @Expose()
   businessId: string;
 
+  @ApiProperty({ example: 0, description: 'Number of products in this category. Computed at read time.' })
+  @Expose()
+  productCount: number;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)
@@ -57,13 +61,17 @@ export class CategoryResponseDto {
   @Type(() => Date)
   updatedAt: Date;
 
-  static from(entity: CategoryEntity): CategoryResponseDto {
-    return plainToInstance(CategoryResponseDto, entity, {
-      excludeExtraneousValues: true,
-    });
+  static from(entity: CategoryEntity & { productCount?: number }): CategoryResponseDto {
+    return plainToInstance(
+      CategoryResponseDto,
+      { ...entity, productCount: entity.productCount ?? 0 },
+      { excludeExtraneousValues: true },
+    );
   }
 
-  static fromMany(entities: CategoryEntity[]): CategoryResponseDto[] {
+  static fromMany(
+    entities: (CategoryEntity & { productCount?: number })[],
+  ): CategoryResponseDto[] {
     return entities.map((e) => CategoryResponseDto.from(e));
   }
 }

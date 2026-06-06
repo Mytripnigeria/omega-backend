@@ -17,7 +17,6 @@ import { ShiftsModule } from './modules/shifts/shifts.module';
 import { PayslipsModule } from './modules/payslips/payslips.module';
 import { CategoriesModule } from './modules/categories/categories.module';
 import { IngredientsModule } from './modules/ingredients/ingredients.module';
-import { VariationGroupsModule } from './modules/variation-groups/variation-groups.module';
 import { AddOnGroupsModule } from './modules/addon-groups/addon-groups.module';
 import { ProductsModule } from './modules/products/products.module';
 import { CombosModule } from './modules/combos/combos.module';
@@ -92,7 +91,6 @@ import { PayoutsModule } from './modules/payouts/payouts.module';
     PayslipsModule,
     CategoriesModule,
     IngredientsModule,
-    VariationGroupsModule,
     AddOnGroupsModule,
     ProductsModule,
     CombosModule,

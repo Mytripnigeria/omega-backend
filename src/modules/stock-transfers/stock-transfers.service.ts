@@ -11,6 +11,7 @@ import {
 } from './entities/stock-transfer.entity';
 import { StockTransferItemEntity } from './entities/stock-transfer-item.entity';
 import { IngredientEntity } from '../ingredients/entities/ingredient.entity';
+import { IngredientLocationStockEntity } from '../ingredients/entities/ingredient-location-stock.entity';
 import { InventoryLocationEntity } from '../inventory-locations/entities/inventory-location.entity';
 import {
   CreateStockTransferDto,
@@ -32,11 +33,38 @@ export class StockTransfersService {
     private readonly itemRepo: Repository<StockTransferItemEntity>,
     @InjectRepository(IngredientEntity)
     private readonly ingredientRepo: Repository<IngredientEntity>,
+    @InjectRepository(IngredientLocationStockEntity)
+    private readonly locationStockRepo: Repository<IngredientLocationStockEntity>,
     @InjectRepository(InventoryLocationEntity)
     private readonly locationRepo: Repository<InventoryLocationEntity>,
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
   ) {}
+
+  /** Upserts a per-location stock row with a delta. Returns the row. */
+  private async applyLocationDelta(
+    mgr: import('typeorm').EntityManager,
+    ingredientId: string,
+    locationId: string,
+    storeId: string,
+    delta: number,
+    opts: { markRestocked?: boolean } = {},
+  ): Promise<IngredientLocationStockEntity> {
+    const repo = mgr.getRepository(IngredientLocationStockEntity);
+    let row = await repo.findOne({ where: { ingredientId, locationId } });
+    if (!row) {
+      row = repo.create({
+        ingredientId,
+        locationId,
+        storeId,
+        currentStock: 0,
+        minStock: 0,
+      });
+    }
+    row.currentStock = Number(row.currentStock) + delta;
+    if (opts.markRestocked) row.lastRestocked = new Date();
+    return repo.save(row);
+  }
 
   async findAll(
     filter: StockTransferFilterDto,
@@ -201,18 +229,50 @@ export class StockTransfersService {
         );
       }
 
-      // Lock and decrement source-side ingredient stock
+      // Debit source-location stock per item. Ingredients managed per-location
+      // adjust the source row; legacy ingredients (no location rows yet) fall
+      // back to the aggregate IngredientEntity.currentStock for back-compat.
       for (const item of transfer.items) {
         const ing = await mgr.getRepository(IngredientEntity).findOne({
           where: { id: item.ingredientId },
         });
         if (!ing) throw new NotFoundException(`Ingredient ${item.ingredientId} not found`);
-        if (Number(ing.currentStock) < Number(item.quantity)) {
-          throw new BadRequestException(
-            `Insufficient stock for ${ing.name}: have ${ing.currentStock}, need ${item.quantity}`,
+        const locationRows = await mgr.getRepository(IngredientLocationStockEntity).find({
+          where: { ingredientId: item.ingredientId },
+        });
+        const qty = Number(item.quantity);
+
+        if (locationRows.length > 0) {
+          const fromRow = locationRows.find(
+            (r) => r.locationId === transfer.fromLocationId,
           );
+          if (!fromRow) {
+            throw new BadRequestException(
+              `${ing.name} has no stock at the source location`,
+            );
+          }
+          if (Number(fromRow.currentStock) < qty) {
+            throw new BadRequestException(
+              `Insufficient stock for ${ing.name} at source: have ${fromRow.currentStock}, need ${qty}`,
+            );
+          }
+          await this.applyLocationDelta(
+            mgr,
+            item.ingredientId,
+            transfer.fromLocationId,
+            transfer.storeId,
+            -qty,
+          );
+        } else {
+          if (Number(ing.currentStock) < qty) {
+            throw new BadRequestException(
+              `Insufficient stock for ${ing.name}: have ${ing.currentStock}, need ${qty}`,
+            );
+          }
         }
-        ing.currentStock = Number(ing.currentStock) - Number(item.quantity);
+        // Keep the denormalized aggregate in sync with the sum-of-locations
+        // invariant (legacy path adjusts the same field directly).
+        ing.currentStock = Number(ing.currentStock) - qty;
         await mgr.getRepository(IngredientEntity).save(ing);
       }
 
@@ -268,11 +328,27 @@ export class StockTransfersService {
         const ing = await mgr.getRepository(IngredientEntity).findOne({
           where: { id: item.ingredientId },
         });
-        if (ing) {
-          ing.currentStock = Number(ing.currentStock) + line.receivedQuantity;
-          ing.lastRestocked = new Date();
-          await mgr.getRepository(IngredientEntity).save(ing);
+        if (!ing) continue;
+        const locationRows = await mgr.getRepository(IngredientLocationStockEntity).find({
+          where: { ingredientId: item.ingredientId },
+        });
+
+        if (locationRows.length > 0) {
+          // Credit (or create) the destination location's stock row.
+          await this.applyLocationDelta(
+            mgr,
+            item.ingredientId,
+            transfer.toLocationId,
+            transfer.storeId,
+            line.receivedQuantity,
+            { markRestocked: true },
+          );
         }
+        // Aggregate sync (per-location flow keeps it equal to sum-of-locations;
+        // legacy flow updates the field directly).
+        ing.currentStock = Number(ing.currentStock) + line.receivedQuantity;
+        ing.lastRestocked = new Date();
+        await mgr.getRepository(IngredientEntity).save(ing);
       }
 
       transfer.status = StockTransferStatus.RECEIVED;
@@ -314,16 +390,28 @@ export class StockTransfersService {
         );
       }
 
-      // If approved/in-transit, restore source stock
+      // If approved/in-transit, restore source-location stock so the cancel
+      // unwinds the approval cleanly.
       if (transfer.status === StockTransferStatus.IN_TRANSIT) {
         for (const item of transfer.items) {
           const ing = await mgr.getRepository(IngredientEntity).findOne({
             where: { id: item.ingredientId },
           });
-          if (ing) {
-            ing.currentStock = Number(ing.currentStock) + Number(item.quantity);
-            await mgr.getRepository(IngredientEntity).save(ing);
+          if (!ing) continue;
+          const locationRows = await mgr.getRepository(IngredientLocationStockEntity).find({
+            where: { ingredientId: item.ingredientId },
+          });
+          if (locationRows.length > 0) {
+            await this.applyLocationDelta(
+              mgr,
+              item.ingredientId,
+              transfer.fromLocationId,
+              transfer.storeId,
+              Number(item.quantity),
+            );
           }
+          ing.currentStock = Number(ing.currentStock) + Number(item.quantity);
+          await mgr.getRepository(IngredientEntity).save(ing);
         }
       }
 

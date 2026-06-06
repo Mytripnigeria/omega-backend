@@ -36,13 +36,26 @@ export class IngredientEntity {
   @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
   costPerUnit: number;
 
-  @ApiPropertyOptional({ example: 'SUP-002', nullable: true })
+  @ApiPropertyOptional({
+    example: 'SUP-002',
+    nullable: true,
+    deprecated: true,
+    description: 'Legacy single-supplier reference. Use `supplierIds` instead; this is kept for backward compatibility and mirrors `supplierIds[0]` on write.',
+  })
   @Column({ nullable: true })
-  supplierId: string;
+  supplierId!: string | null;
+
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['sup1a2b3-1234-4f1a-8c3e-9a4f0c4e2b21'],
+    description: 'List of supplier UUIDs that supply this ingredient. Multi-select on the merchant hub form.',
+  })
+  @Column({ type: 'simple-array', nullable: true })
+  supplierIds!: string[] | null;
 
   @ApiPropertyOptional({ example: 'RI-LG-001', nullable: true })
   @Column({ nullable: true })
-  sku: string;
+  sku!: string | null;
 
   @ApiProperty({ format: 'uuid', example: 'c2d3e4f5-1234-4f1a-8c3e-9a4f0c4e2b21' })
   @Column()
@@ -50,7 +63,7 @@ export class IngredientEntity {
 
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true, description: 'When stock was last replenished' })
   @Column({ nullable: true, type: 'timestamp' })
-  lastRestocked: Date;
+  lastRestocked!: Date | null;
 
   @ApiPropertyOptional({
     example: '2026-06-12',

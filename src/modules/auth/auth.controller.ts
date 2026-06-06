@@ -24,6 +24,7 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { Disable2FADto, Verify2FADto } from './dto/two-factor.dto';
 import { RequestPhoneOtpDto, VerifyPhoneOtpDto } from './dto/phone-auth.dto';
+import { AdminRegisterDto } from './dto/admin-register.dto';
 import {
   StorefrontLoginDto,
   StorefrontRegisterDto,
@@ -64,6 +65,19 @@ export class AuthController {
   @Post('admin/login')
   adminLogin(@Body() dto: AdminLoginDto) {
     return this.authService.adminLogin(dto);
+  }
+
+  @ApiOperation({
+    summary: 'Self-signup for a new merchant',
+    description:
+      'Creates the business, admin account, and first store in one transaction, then returns admin tokens. ' +
+      'Used by the merchant-hub onboarding wizard so a new merchant goes from "Sign up" to a working dashboard in one step. Rate-limited.',
+  })
+  @ApiOkResponse({ type: AdminLoginResponseDto })
+  @Throttle({ default: { ttl: 60_000, limit: 3 } })
+  @Post('admin/register')
+  adminRegister(@Body() dto: AdminRegisterDto) {
+    return this.authService.adminRegister(dto);
   }
 
   @ApiOperation({

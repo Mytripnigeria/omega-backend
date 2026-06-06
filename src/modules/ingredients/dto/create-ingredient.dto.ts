@@ -1,5 +1,35 @@
-import { IsString, IsOptional, IsNumber, IsDateString } from 'class-validator';
+import {
+  IsArray,
+  IsDateString,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export class InitialLocationStockDto {
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID()
+  locationId!: string;
+
+  @ApiPropertyOptional({ example: 50, default: 0 })
+  @IsOptional()
+  @IsNumber()
+  currentStock?: number;
+
+  @ApiPropertyOptional({ example: 5, default: 0 })
+  @IsOptional()
+  @IsNumber()
+  minStock?: number;
+
+  @ApiPropertyOptional({ example: '2026-06-12' })
+  @IsOptional()
+  @IsDateString()
+  expiryDate?: string;
+}
 
 export class CreateIngredientDto {
   @ApiProperty({ example: 'Long Grain Rice', description: 'Ingredient display name' })
@@ -10,12 +40,12 @@ export class CreateIngredientDto {
   @IsString()
   unit: string;
 
-  @ApiPropertyOptional({ example: 200, description: 'Starting stock quantity in the configured unit' })
+  @ApiPropertyOptional({ example: 200, description: 'Aggregate starting stock (sum across locations). If `locations` is provided, this is recomputed from those rows.' })
   @IsOptional()
   @IsNumber()
   currentStock?: number;
 
-  @ApiPropertyOptional({ example: 20, description: 'Stock level that triggers a low-stock alert' })
+  @ApiPropertyOptional({ example: 20, description: 'Aggregate stock-alert threshold' })
   @IsOptional()
   @IsNumber()
   minStock?: number;
@@ -25,10 +55,34 @@ export class CreateIngredientDto {
   @IsNumber()
   costPerUnit?: number;
 
-  @ApiPropertyOptional({ format: 'uuid', example: 'sup1a2b3-1234-4f1a-8c3e-9a4f0c4e2b21', description: 'Supplier ID' })
+  @ApiPropertyOptional({
+    format: 'uuid',
+    deprecated: true,
+    description: 'Legacy single-supplier reference. Prefer `supplierIds`. When both are given, `supplierIds` wins.',
+  })
   @IsOptional()
   @IsString()
   supplierId?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Supplier UUIDs that supply this ingredient. Multi-select on the merchant hub.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  supplierIds?: string[];
+
+  @ApiPropertyOptional({
+    type: () => [InitialLocationStockDto],
+    description:
+      'Initial per-location stock rows. The aggregate `currentStock`/`minStock` on the ingredient are derived from these (sum of stocks; sum of minStocks).',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => InitialLocationStockDto)
+  locations?: InitialLocationStockDto[];
 
   @ApiPropertyOptional({ example: 'RICE-LG-001', description: 'Stock-keeping unit for this ingredient' })
   @IsOptional()
@@ -46,7 +100,7 @@ export class CreateIngredientDto {
 
   @ApiPropertyOptional({
     example: '2026-06-12',
-    description: 'Best-before / use-by date for the current batch (ISO 8601 date)',
+    description: 'Aggregate best-before / use-by date',
   })
   @IsOptional()
   @IsDateString()

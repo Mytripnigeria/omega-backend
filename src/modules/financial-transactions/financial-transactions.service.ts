@@ -101,9 +101,18 @@ export class FinancialTransactionsService {
       .skip((page - 1) * limit)
       .take(limit);
 
-    if (filter.storeId) qb.andWhere('t.storeId = :storeId', { storeId: filter.storeId });
+    // Per-store filter is inclusive of business-scope entries (storeId IS
+    // NULL) — wallet top-ups, refunds, and similar business-level events
+    // aren't tied to a single store but the merchant expects to see them
+    // regardless of which store they're looking at.
+    if (filter.storeId)
+      qb.andWhere('(t.storeId = :storeId OR t.storeId IS NULL)', {
+        storeId: filter.storeId,
+      });
     if (actor.sub_type === 'staff' && actor.storeId) {
-      qb.andWhere('t.storeId = :scopedStore', { scopedStore: actor.storeId });
+      qb.andWhere('(t.storeId = :scopedStore OR t.storeId IS NULL)', {
+        scopedStore: actor.storeId,
+      });
     }
     if (filter.type) qb.andWhere('t.type = :type', { type: filter.type });
     if (filter.customerId)
@@ -161,10 +170,18 @@ export class FinancialTransactionsService {
     const baseQb = this.repo
       .createQueryBuilder('t')
       .where('t.businessId = :businessId', { businessId: actor.businessId });
+    // Match the inclusive filter the list endpoint uses so stats reflect what
+    // the user sees in the rows below (business-scope rows count under each
+    // store view).
     if (actor.sub_type === 'staff' && actor.storeId) {
-      baseQb.andWhere('t.storeId = :scopedStore', { scopedStore: actor.storeId });
+      baseQb.andWhere('(t.storeId = :scopedStore OR t.storeId IS NULL)', {
+        scopedStore: actor.storeId,
+      });
     }
-    if (filter.storeId) baseQb.andWhere('t.storeId = :storeId', { storeId: filter.storeId });
+    if (filter.storeId)
+      baseQb.andWhere('(t.storeId = :storeId OR t.storeId IS NULL)', {
+        storeId: filter.storeId,
+      });
     if (filter.dateFrom) baseQb.andWhere('t.createdAt >= :df', { df: filter.dateFrom });
     if (filter.dateTo)
       baseQb.andWhere('t.createdAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });

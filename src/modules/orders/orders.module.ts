@@ -30,6 +30,10 @@ import { ComboEntity } from '../combos/entities/combo.entity';
 import { ProductVariationEntity } from '../products/entities/product-variation.entity';
 import { TableEntity } from '../tables/entities/table.entity';
 import { PushNotificationsModule } from '../push-notifications/push-notifications.module';
+import { ProductIngredientEntity } from '../products/entities/product-ingredient.entity';
+import { IngredientEntity } from '../ingredients/entities/ingredient.entity';
+import { IngredientMovementEntity } from '../ingredients/entities/ingredient-movement.entity';
+import { IngredientLocationStockEntity } from '../ingredients/entities/ingredient-location-stock.entity';
 
 @Module({
   imports: [
@@ -47,6 +51,10 @@ import { PushNotificationsModule } from '../push-notifications/push-notification
       WalletTransactionEntity,
       PointsTransactionEntity,
       TableEntity,
+      ProductIngredientEntity,
+      IngredientEntity,
+      IngredientMovementEntity,
+      IngredientLocationStockEntity,
     ]),
     ActivityLogModule,
     CustomersModule,

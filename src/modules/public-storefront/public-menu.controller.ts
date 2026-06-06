@@ -173,6 +173,13 @@ export class PublicMenuController {
       .leftJoinAndSelect('addonGroups.addons', 'addons')
       .where('p.storeId = :storeId', { storeId })
       .andWhere('p.status = true')
+      // visibility is a simple-array column (CSV of channels: pos, self,
+      // storefront, ubereats). Treat a null/empty list as "visible
+      // everywhere" for legacy products; otherwise require 'storefront' to
+      // be one of the comma-separated values.
+      .andWhere(
+        "(p.visibility IS NULL OR p.visibility = '' OR (',' || p.visibility || ',') LIKE '%,storefront,%')",
+      )
       .orderBy('p.createdAt', 'DESC');
 
     if (categoryId) qb.andWhere('p.categoryId = :categoryId', { categoryId });
@@ -201,6 +208,15 @@ export class PublicMenuController {
       ],
     });
     if (!product || !product.status) {
+      throw new BadRequestException('Product not available');
+    }
+    // Respect the merchant's per-channel visibility flag. Null/empty list =
+    // visible everywhere (legacy default).
+    if (
+      product.visibility &&
+      product.visibility.length > 0 &&
+      !product.visibility.includes('storefront')
+    ) {
       throw new BadRequestException('Product not available');
     }
     // Verify the product's store belongs to the requested business

@@ -1,4 +1,4 @@
-import { IsDateString, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class AdjustStockDto {
@@ -19,4 +19,13 @@ export class AdjustStockDto {
   @IsOptional()
   @IsDateString()
   expiryDate?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      "Target inventory location for this adjustment. Required when the ingredient is stocked at more than one location; if omitted and exactly one location exists, that location is used.",
+  })
+  @IsOptional()
+  @IsUUID()
+  locationId?: string;
 }

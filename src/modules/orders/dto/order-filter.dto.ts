@@ -1,5 +1,5 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsDateString, IsEnum, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { OrderStatus } from '../entities/order.entity';
 
@@ -95,11 +95,13 @@ export class UpdatePrepStatusDto {
 }
 
 export class RefundOrderDto {
-  @ApiPropertyOptional({
+  @ApiProperty({
     example: 2500,
     description:
       'Amount to refund. Must be > 0 and <= (paidAmount - refundedAmount).',
   })
+  @IsNumber()
+  @Min(0.01)
   amount: number;
 
   @ApiPropertyOptional({ example: 'Wrong item delivered' })

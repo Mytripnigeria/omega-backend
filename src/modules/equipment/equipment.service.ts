@@ -84,7 +84,36 @@ export class EquipmentService {
   ): Promise<EquipmentResponseDto> {
     const eq = await this.repo.findOne({ where: { id } });
     if (!eq) throw new NotFoundException('Equipment not found');
+
+    // Detect whether the caller is explicitly setting nextMaintenanceDate so
+    // we know when to auto-recompute it from the (possibly new) cycle.
+    const cycleProvided = Object.prototype.hasOwnProperty.call(
+      dto,
+      'maintenanceCycleDays',
+    );
+    const nextProvided = Object.prototype.hasOwnProperty.call(
+      dto,
+      'nextMaintenanceDate',
+    );
+
     Object.assign(eq, dto);
+
+    // When the maintenance cycle is edited and the caller didn't pin
+    // nextMaintenanceDate explicitly, slide the next-due date so it stays
+    // in sync with the new cadence. Anchor from lastMaintenanceDate when
+    // available, otherwise from today.
+    if (cycleProvided && !nextProvided && eq.maintenanceCycleDays) {
+      const anchor = eq.lastMaintenanceDate
+        ? new Date(eq.lastMaintenanceDate)
+        : new Date();
+      const next = new Date(anchor);
+      next.setDate(next.getDate() + Number(eq.maintenanceCycleDays));
+      eq.nextMaintenanceDate = next.toISOString().slice(0, 10);
+    } else if (cycleProvided && !nextProvided && !eq.maintenanceCycleDays) {
+      // Cycle cleared → no scheduled next maintenance.
+      eq.nextMaintenanceDate = null;
+    }
+
     const saved = await this.repo.save(eq);
     return EquipmentResponseDto.from(saved);
   }

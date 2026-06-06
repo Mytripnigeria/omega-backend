@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Patch,
   Delete,
   Body,
@@ -24,7 +25,7 @@ import {
 } from '@nestjs/swagger';
 import { Request } from 'express';
 import { IngredientsService } from './ingredients.service';
-import { CreateIngredientDto } from './dto/create-ingredient.dto';
+import { CreateIngredientDto, InitialLocationStockDto } from './dto/create-ingredient.dto';
 import { UpdateIngredientDto } from './dto/update-ingredient.dto';
 import { FilterIngredientDto } from './dto/filter-ingredient.dto';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
@@ -205,6 +206,7 @@ export class IngredientsController {
     summary: 'Adjust ingredient stock',
     description:
       'Adjusts `currentStock` by `adjustment` (signed). Positive = intake, negative = correction. ' +
+      'For ingredients stocked at multiple locations, pass `locationId` to target a specific bucket — otherwise the request 400s. ' +
       'Writes an append-only `IngredientMovement` row with the previous/new stock values.',
   })
   @ApiParam({ name: 'id', format: 'uuid' })
@@ -217,6 +219,48 @@ export class IngredientsController {
     @Body() dto: AdjustStockDto,
   ) {
     return this.ingredientsService.adjustStock(actorFrom(req), id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'List per-location stock for an ingredient',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @UseGuards(JwtOrStaffGuard)
+  @Get(':id/locations')
+  listLocationStocks(@Param('id') id: string) {
+    return this.ingredientsService.listLocationStocks(id);
+  }
+
+  @ApiOperation({
+    summary: 'Upsert per-location stock for an ingredient',
+    description:
+      'Creates or updates the stock row for this (ingredient, location) pair, then recomputes the aggregate fields on the ingredient.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'locationId', format: 'uuid' })
+  @ApiOkResponse({ type: IngredientResponseDto })
+  @UseGuards(JwtAuthGuard)
+  @Put(':id/locations/:locationId')
+  setLocationStock(
+    @Param('id') id: string,
+    @Param('locationId') locationId: string,
+    @Body() dto: Omit<InitialLocationStockDto, 'locationId'>,
+  ) {
+    return this.ingredientsService.setLocationStock(id, locationId, dto);
+  }
+
+  @ApiOperation({ summary: 'Remove a per-location stock row' })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'locationId', format: 'uuid' })
+  @ApiNoContentResponse()
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/locations/:locationId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  removeLocationStock(
+    @Param('id') id: string,
+    @Param('locationId') locationId: string,
+  ) {
+    return this.ingredientsService.removeLocationStock(id, locationId);
   }
 
   @ApiOperation({
