@@ -22,6 +22,7 @@ import { ReportsService } from './reports.service';
 import { ExportFormat, ExportType, ReportsExporter } from './reports.exporter';
 import {
   DashboardSummaryFilterDto,
+  ExportReportFilterDto,
   ReportsRangeDto,
   SalesReportFilterDto,
   TopProductsFilterDto,
@@ -214,11 +215,11 @@ export class ReportsController {
   async export(
     @Req() req: AuthedRequest,
     @Res() res: Response,
-    @Query('type') type: string,
-    @Query() filter: ReportsRangeDto,
-    @Query('format') formatQuery?: string,
-    @Query('storeName') storeName?: string,
+    @Query() filter: ExportReportFilterDto,
   ): Promise<void> {
+    const type = filter.type ?? '';
+    const formatQuery = filter.format;
+    const storeName = filter.storeName;
     const allowedTypes: ExportType[] = [
       'sales',
       'top-products',

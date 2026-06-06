@@ -5,6 +5,7 @@ import {
   IsEnum,
   IsInt,
   IsOptional,
+  IsString,
   IsUUID,
   Max,
   Min,
@@ -43,6 +44,25 @@ export class DashboardSummaryFilterDto {
   @IsOptional()
   @IsUUID()
   storeId?: string;
+}
+
+export class ExportReportFilterDto extends ReportsRangeDto {
+  @ApiPropertyOptional({
+    enum: ['sales', 'top-products', 'food-cost', 'waste', 'stock'],
+  })
+  @IsOptional()
+  @IsEnum(['sales', 'top-products', 'food-cost', 'waste', 'stock'])
+  type?: string;
+
+  @ApiPropertyOptional({ enum: ['xlsx', 'pdf'], default: 'xlsx' })
+  @IsOptional()
+  @IsEnum(['xlsx', 'pdf'])
+  format?: string;
+
+  @ApiPropertyOptional({ description: 'Label printed on the document.' })
+  @IsOptional()
+  @IsString()
+  storeName?: string;
 }
 
 export class TopProductsFilterDto extends ReportsRangeDto {
