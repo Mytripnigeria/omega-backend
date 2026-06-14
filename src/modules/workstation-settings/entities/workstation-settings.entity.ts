@@ -88,6 +88,16 @@ export class WorkstationSettingsEntity {
   notificationVolume: number;
 
   // ---------- Access control ----------
+  @ApiProperty({
+    example: false,
+    default: false,
+    description:
+      'When true, new orders from every channel are auto-accepted (INITIATED → ' +
+      'PENDING) instead of waiting for a cashier to Accept them in the counter POS.',
+  })
+  @Column({ default: false })
+  autoAcceptOrders: boolean;
+
   @ApiProperty({ example: false, default: false })
   @Column({ default: false })
   managerOverrideRequired: boolean;
@@ -121,6 +131,19 @@ export class WorkstationSettingsEntity {
   })
   @Column({ type: 'simple-array', default: '' })
   defaultPermissions: string[];
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: { type: 'array', items: { type: 'string' } },
+    nullable: true,
+    example: { counter_pos: ['Cashier'], instore: ['Manager', 'Supervisor'] },
+    description:
+      'Maps each workstation function (counter_pos, self_service, kitchen, ' +
+      'waiter, delivery, lobby, instore, outstore, expenses, managers) to the ' +
+      'role names allowed to access it. Empty/absent for a function = all roles.',
+  })
+  @Column({ type: 'jsonb', nullable: true })
+  functionRoleAccess: Record<string, string[]> | null;
 
   @ApiProperty({ example: false, default: false })
   @Column({ default: false })

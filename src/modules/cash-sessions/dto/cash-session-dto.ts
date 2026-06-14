@@ -16,6 +16,11 @@ export class OpenCashSessionDto {
   @Min(0)
   openingFloat: number;
 
+  @ApiPropertyOptional({ example: 'SCPS1 - Counter 1', description: 'Billing counter name' })
+  @IsOptional()
+  @IsString()
+  counterName?: string;
+
   @ApiPropertyOptional({ format: 'uuid', description: 'Optional linked shift' })
   @IsOptional()
   @IsUUID()

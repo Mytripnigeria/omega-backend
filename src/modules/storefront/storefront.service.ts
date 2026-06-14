@@ -636,10 +636,15 @@ export class StorefrontService implements OnModuleInit {
       bank?: { bankName?: string; accountNumber?: string; accountName?: string };
     }>
   > {
-    const methods = await this.paymentMethodRepo.find({
+    const allEnabled = await this.paymentMethodRepo.find({
       where: { businessId, isEnabled: true },
       order: { order: 'ASC', createdAt: 'ASC' },
     });
+    // Only surface methods configured to show on the Storefront channel.
+    // Treat an empty visibility list as "all channels" for backwards compat.
+    const methods = allEnabled.filter(
+      (m) => !m.visibility?.length || m.visibility.includes('storefront'),
+    );
     return methods.map((m) => {
       const cfg = (m.config ?? {}) as Record<string, unknown>;
       const base = { id: m.id, type: m.type, label: m.label, order: m.order };

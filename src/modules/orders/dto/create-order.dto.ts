@@ -125,6 +125,27 @@ export class CreateOrderDto {
   @Min(0)
   taxAmount?: number;
 
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      'When true the cashier is accepting the order as they create it ' +
+      '(e.g. "Process Bill" at the counter): it skips INITIATED and starts at ' +
+      'PENDING. New orders otherwise start at INITIATED awaiting acceptance.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  accept?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      '"Quick Bill" — the order only contains ready-made items (snacks/drinks) ' +
+      'so it skips the kitchen flow (PENDING → PREPARING) and is created READY.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  quickBill?: boolean;
+
   @ApiProperty({ type: () => [CreateOrderItemDto] })
   @IsArray()
   @ArrayMinSize(1)

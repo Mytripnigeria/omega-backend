@@ -1,11 +1,13 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -15,7 +17,7 @@ import {
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { JwtOrStaffGuard } from '../../common/guards/jwt-or-staff.guard';
 import { JwtPayload } from '../../common/types/jwt-payload.types';
 import { CashSessionsService } from './cash-sessions.service';
@@ -122,6 +124,29 @@ export class CashSessionsController {
   }
 
   @ApiOperation({
+    summary: 'Download the Register Report (PDF)',
+    description: 'Streams a PDF register report matching the printed sample.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @Get(':id/report.pdf')
+  async report(
+    @Req() req: AuthedRequest,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.service.generateReportPdf(
+      actorFrom(req),
+      id,
+    );
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': buffer.length,
+    });
+    res.end(buffer);
+  }
+
+  @ApiOperation({
     summary: 'Close a cash session',
     description:
       'Staff submits actual cash/card/mobile counts. Backend computes expected from order ' +
@@ -151,5 +176,12 @@ export class CashSessionsController {
     @Body() dto: ReviewCashSessionDto,
   ) {
     return this.service.review(actorFrom(req), id, dto);
+  }
+
+  @ApiOperation({ summary: 'Delete a register (admin)' })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @Delete(':id')
+  remove(@Req() req: AuthedRequest, @Param('id') id: string) {
+    return this.service.remove(actorFrom(req), id);
   }
 }

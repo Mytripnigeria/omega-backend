@@ -44,6 +44,7 @@ import { IntegrationsService } from '../integrations/integrations.service';
 import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
 import { TransactionMethod } from '../financial-transactions/entities/financial-transaction.entity';
 import { UserJwtPayload } from '../../common/types/jwt-payload.types';
+import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
 
 export interface PlaceOrderResult {
   order: OrderResponseDto;
@@ -102,6 +103,8 @@ export class StorefrontOrdersService {
     private readonly variationRepo: Repository<ProductVariationEntity>,
     @InjectRepository(ComboEntity)
     private readonly comboRepo: Repository<ComboEntity>,
+    @InjectRepository(WorkstationSettingsEntity)
+    private readonly workstationSettingsRepo: Repository<WorkstationSettingsEntity>,
     private readonly dataSource: DataSource,
     private readonly customersService: CustomersService,
     private readonly couponsService: CouponsService,
@@ -320,6 +323,19 @@ export class StorefrontOrdersService {
         }
       }
 
+      // Storefront orders enter as INITIATED and surface in the counter POS for
+      // acceptance, unless the merchant has enabled auto-accept.
+      const autoAccept =
+        (
+          await mgr.getRepository(WorkstationSettingsEntity).findOne({
+            where: { businessId: user.businessId },
+          })
+        )?.autoAcceptOrders ?? false;
+      const statusChain: OrderStatus[] = autoAccept
+        ? [OrderStatus.INITIATED, OrderStatus.PENDING]
+        : [OrderStatus.INITIATED];
+      const initialStatus = statusChain[statusChain.length - 1];
+
       const orderNumber = await this.nextOrderNumber(mgr, dto.storeId);
       const order = mgr.create(OrderEntity, {
         orderNumber,
@@ -333,7 +349,7 @@ export class StorefrontOrdersService {
         tableNumber: null,
         channel: 'website',
         isDelivery: dto.isDelivery,
-        status: OrderStatus.PENDING,
+        status: initialStatus,
         subtotal,
         taxAmount,
         discountAmount: couponDiscount + pointsValue,
@@ -370,15 +386,19 @@ export class StorefrontOrdersService {
       });
       const persisted = await mgr.save(order);
 
-      await mgr.save(
-        mgr.create(OrderStatusEventEntity, {
-          orderId: persisted.id,
-          fromStatus: null,
-          toStatus: OrderStatus.PENDING,
-          actorId: user.sub,
-          actorType: 'user',
-        }),
-      );
+      let prevStatus: OrderStatus | null = null;
+      for (const to of statusChain) {
+        await mgr.save(
+          mgr.create(OrderStatusEventEntity, {
+            orderId: persisted.id,
+            fromStatus: prevStatus,
+            toStatus: to,
+            actorId: user.sub,
+            actorType: 'user',
+          }),
+        );
+        prevStatus = to;
+      }
 
       if (dto.paymentChannel === 'wallet' && total > 0) {
         customerLocked.walletBalance =

@@ -79,6 +79,10 @@ export class IngredientResponseDto {
   @Expose()
   sku: string | null;
 
+  @ApiPropertyOptional({ example: 'ingredient', nullable: true })
+  @Expose()
+  type: string | null;
+
   @ApiProperty({ format: 'uuid', example: 'c2d3e4f5-1234-4f1a-8c3e-9a4f0c4e2b21' })
   @Expose()
   storeId: string;

@@ -56,6 +56,14 @@ export class CreateIngredientDto {
   costPerUnit?: number;
 
   @ApiPropertyOptional({
+    example: 'ingredient',
+    description: 'Inventory variant/type: ingredient, packaging, premix, hygiene, etc.',
+  })
+  @IsOptional()
+  @IsString()
+  type?: string;
+
+  @ApiPropertyOptional({
     format: 'uuid',
     deprecated: true,
     description: 'Legacy single-supplier reference. Prefer `supplierIds`. When both are given, `supplierIds` wins.',

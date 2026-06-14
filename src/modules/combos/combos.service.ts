@@ -1,8 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like, FindOptionsWhere } from 'typeorm';
+import { Repository, Like, FindOptionsWhere, In } from 'typeorm';
 import { ComboEntity } from './entities/combo.entity';
 import { ComboItemEntity } from './entities/combo-item.entity';
+import { ProductEntity } from '../products/entities/product.entity';
 import { CreateComboDto, CreateComboItemDto } from './dto/create-combo.dto';
 import { UpdateComboDto, ToggleComboStatusDto } from './dto/update-combo.dto';
 import { UpdateComboItemDto } from './dto/update-combo-item.dto';
@@ -21,8 +22,35 @@ export class CombosService {
     private readonly comboRepo: Repository<ComboEntity>,
     @InjectRepository(ComboItemEntity)
     private readonly comboItemRepo: Repository<ComboItemEntity>,
+    @InjectRepository(ProductEntity)
+    private readonly productRepo: Repository<ProductEntity>,
     private readonly storage: StorageService,
   ) {}
+
+  /**
+   * The combo "original price" is always the combined selling price of the
+   * selected products (sellingPrice × quantity) — never a free-text field.
+   * Returns the sum across the given product/quantity pairs.
+   */
+  private async computeOriginalPrice(
+    items: { productId: string; quantity?: number }[],
+  ): Promise<number> {
+    if (!items.length) return 0;
+    const ids = Array.from(new Set(items.map((i) => i.productId)));
+    const products = await this.productRepo.find({ where: { id: In(ids) } });
+    const priceById = new Map(products.map((p) => [p.id, Number(p.sellingPrice)]));
+    return items.reduce(
+      (sum, i) => sum + (priceById.get(i.productId) ?? 0) * (i.quantity ?? 1),
+      0,
+    );
+  }
+
+  /** Recomputes and persists a combo's originalPrice from its current items. */
+  private async recalcOriginalPrice(comboId: string): Promise<void> {
+    const items = await this.comboItemRepo.find({ where: { comboId } });
+    const originalPrice = await this.computeOriginalPrice(items);
+    await this.comboRepo.update(comboId, { originalPrice });
+  }
 
   private async resolveImageFields(
     target: { imageUrl?: string | null; imageFileId?: string | null },
@@ -53,6 +81,10 @@ export class CombosService {
       );
     }
 
+    // Original price is always derived from the selected products, never the
+    // (ignored) DTO value.
+    combo.originalPrice = await this.computeOriginalPrice(products ?? []);
+
     const saved = await this.comboRepo.save(combo);
     return this.findOne(saved.id);
   }
@@ -67,6 +99,7 @@ export class CombosService {
 
     const [data, total] = await this.comboRepo.findAndCount({
       where,
+      relations: ['items', 'items.product'],
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
@@ -102,10 +135,15 @@ export class CombosService {
 
   async update(id: string, dto: UpdateComboDto): Promise<ComboResponseDto> {
     const combo = await this.findEntity(id);
-    const { imageFileId, imageUrl, ...rest } = dto;
+    // originalPrice is derived, never user-set — strip it if sent.
+    const { imageFileId, imageUrl, originalPrice: _ignored, ...rest } =
+      dto as UpdateComboDto & { originalPrice?: number };
     Object.assign(combo, rest);
     await this.resolveImageFields(combo, { imageFileId, imageUrl });
     await this.comboRepo.save(combo);
+    // Items are managed via the add/update/remove item endpoints; recompute the
+    // derived original price in case the selection changed.
+    await this.recalcOriginalPrice(id);
     return this.findOne(id);
   }
 
@@ -129,6 +167,7 @@ export class CombosService {
       quantity: dto.quantity ?? 1,
     });
     const saved = await this.comboItemRepo.save(item);
+    await this.recalcOriginalPrice(comboId);
     const reloaded = await this.comboItemRepo.findOne({
       where: { id: saved.id },
       relations: ['product'],
@@ -140,6 +179,7 @@ export class CombosService {
     const item = await this.findItem(comboId, itemId);
     item.quantity = dto.quantity;
     await this.comboItemRepo.save(item);
+    await this.recalcOriginalPrice(comboId);
     const reloaded = await this.comboItemRepo.findOne({
       where: { id: itemId },
       relations: ['product'],
@@ -150,6 +190,7 @@ export class CombosService {
   async removeItem(comboId: string, itemId: string): Promise<void> {
     const item = await this.findItem(comboId, itemId);
     await this.comboItemRepo.remove(item);
+    await this.recalcOriginalPrice(comboId);
   }
 
   private async findItem(comboId: string, itemId: string): Promise<ComboItemEntity> {

@@ -26,6 +26,14 @@ export class CashSessionResponseDto {
   @Expose()
   staffName: string;
 
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
+  counterName: string | null;
+
+  @ApiPropertyOptional({ type: [String], nullable: true })
+  @Expose()
+  staffsJoined: string[] | null;
+
   @ApiPropertyOptional({ format: 'uuid', nullable: true })
   @Expose()
   shiftId: string | null;

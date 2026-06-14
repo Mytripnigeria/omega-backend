@@ -2,7 +2,9 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -19,13 +21,73 @@ import { JwtPayload } from '../../common/types/jwt-payload.types';
 import { CashSessionsService } from '../cash-sessions/cash-sessions.service';
 
 @Injectable()
-export class ShiftsService {
+export class ShiftsService implements OnModuleInit {
+  private readonly logger = new Logger(ShiftsService.name);
+  /** Grace period after a shift's scheduled end before auto clock-out. */
+  private static readonly AUTO_CLOCKOUT_GRACE_MIN = 5;
+
   constructor(
     @InjectRepository(ShiftEntity)
     private readonly shiftRepo: Repository<ShiftEntity>,
     private readonly activityLog: ActivityLogService,
     private readonly cashSessions: CashSessionsService,
   ) {}
+
+  onModuleInit(): void {
+    // Sweep once a minute for in-progress shifts whose scheduled end (+grace)
+    // has passed and auto clock-out the staff who forgot to. setInterval keeps
+    // this dependency-free; unref() so it never blocks process shutdown.
+    const timer = setInterval(() => {
+      this.autoClockOutExpiredShifts().catch((err) =>
+        this.logger.warn(`Auto clock-out sweep failed: ${(err as Error).message}`),
+      );
+    }, 60_000);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+
+  /**
+   * Auto clock-out: any IN_PROGRESS shift whose scheduled end time plus a
+   * 5-minute grace has elapsed is completed automatically (the staff didn't
+   * clock out themselves). Idempotent — only touches IN_PROGRESS rows.
+   */
+  async autoClockOutExpiredShifts(): Promise<number> {
+    const inProgress = await this.shiftRepo.find({
+      where: { status: ShiftStatus.IN_PROGRESS },
+    });
+    const now = Date.now();
+    const graceMs = ShiftsService.AUTO_CLOCKOUT_GRACE_MIN * 60_000;
+    let closed = 0;
+
+    for (const shift of inProgress) {
+      const endTime = (shift.endTime ?? '').slice(0, 5); // HH:MM
+      if (!shift.date || !endTime) continue;
+      let scheduledEnd = new Date(`${shift.date}T${endTime}:00`).getTime();
+      // Overnight shift (end earlier than start) ends on the following day.
+      const startTime = (shift.startTime ?? '').slice(0, 5);
+      if (startTime && endTime < startTime) scheduledEnd += 24 * 60 * 60_000;
+      if (Number.isNaN(scheduledEnd)) continue;
+
+      if (now >= scheduledEnd + graceMs) {
+        shift.actualClockOut = new Date();
+        shift.status = ShiftStatus.COMPLETED;
+        await this.shiftRepo.save(shift);
+        closed++;
+        this.activityLog.record({
+          actorType: 'system',
+          actorId: null,
+          actorName: 'Auto clock-out',
+          action: 'shift.auto_clocked_out',
+          businessId: '',
+          storeId: shift.storeId,
+          resourceType: 'shift',
+          resourceId: shift.id,
+          metadata: { date: shift.date, endTime: shift.endTime },
+        });
+      }
+    }
+    if (closed > 0) this.logger.log(`Auto clocked-out ${closed} shift(s)`);
+    return closed;
+  }
 
   async create(dto: CreateShiftDto): Promise<ShiftResponseDto> {
     const shift = this.shiftRepo.create(dto);

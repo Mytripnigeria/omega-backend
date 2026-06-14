@@ -69,6 +69,10 @@ export class WorkstationSettingsResponseDto {
 
   @ApiProperty({ example: false })
   @Expose()
+  autoAcceptOrders: boolean;
+
+  @ApiProperty({ example: false })
+  @Expose()
   managerOverrideRequired: boolean;
 
   @ApiProperty({ example: true })
@@ -94,6 +98,15 @@ export class WorkstationSettingsResponseDto {
   @ApiProperty({ type: [String], example: ['orders:create'] })
   @Expose()
   defaultPermissions: string[];
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: { type: 'array', items: { type: 'string' } },
+    nullable: true,
+    example: { counter_pos: ['Cashier'] },
+  })
+  @Expose()
+  functionRoleAccess: Record<string, string[]> | null;
 
   @ApiProperty({ example: false })
   @Expose()

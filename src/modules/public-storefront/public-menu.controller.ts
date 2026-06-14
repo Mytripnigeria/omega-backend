@@ -256,7 +256,9 @@ export class PublicMenuController {
 
     const combos = await this.comboRepo.find({
       where: { storeId, isActive: true },
-      relations: ['items'],
+      // Load each item's product so the storefront can list the selected
+      // products (with names/prices) and show the original price + savings.
+      relations: ['items', 'items.product'],
       order: { createdAt: 'DESC' },
     });
     return combos.map(ComboResponseDto.from);

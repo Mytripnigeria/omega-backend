@@ -29,7 +29,11 @@ import { CreateIngredientDto, InitialLocationStockDto } from './dto/create-ingre
 import { UpdateIngredientDto } from './dto/update-ingredient.dto';
 import { FilterIngredientDto } from './dto/filter-ingredient.dto';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
-import { MovementFilterDto, TransferStockDto } from './dto/movement-dto';
+import {
+  MovementFilterDto,
+  TransferStockDto,
+  TransferToLocationDto,
+} from './dto/movement-dto';
 import { JwtOrStaffGuard } from '../../common/guards/jwt-or-staff.guard';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { JwtPayload } from '../../common/types/jwt-payload.types';
@@ -287,5 +291,22 @@ export class IngredientsController {
     @Body() dto: TransferStockDto,
   ) {
     return this.ingredientsService.transfer(actorFrom(req), id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Transfer stock between two locations',
+    description:
+      'Moves quantity of this ingredient from one inventory location to another. ' +
+      'The destination must already stock the item; records a TRANSFER movement naming both locations.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @UseGuards(JwtOrStaffGuard)
+  @Post(':id/transfer-to-location')
+  transferToLocation(
+    @Req() req: AuthedRequest,
+    @Param('id') id: string,
+    @Body() dto: TransferToLocationDto,
+  ) {
+    return this.ingredientsService.transferToLocation(actorFrom(req), id, dto);
   }
 }

@@ -5,6 +5,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   Max,
@@ -109,6 +110,11 @@ export class UpdateWorkstationSettingsDto {
   @ApiPropertyOptional({ example: false })
   @IsOptional()
   @IsBoolean()
+  autoAcceptOrders?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  @IsOptional()
+  @IsBoolean()
   managerOverrideRequired?: boolean;
 
   @ApiPropertyOptional({ example: true })
@@ -142,6 +148,16 @@ export class UpdateWorkstationSettingsDto {
   @ArrayUnique()
   @IsString({ each: true })
   defaultPermissions?: string[];
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: { type: 'array', items: { type: 'string' } },
+    example: { counter_pos: ['Cashier'], instore: ['Manager'] },
+    description: 'Per-function role access map (function key → allowed role names).',
+  })
+  @IsOptional()
+  @IsObject()
+  functionRoleAccess?: Record<string, string[]>;
 
   @ApiPropertyOptional({ example: false })
   @IsOptional()

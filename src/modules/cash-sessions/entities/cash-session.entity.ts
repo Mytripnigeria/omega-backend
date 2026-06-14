@@ -36,6 +36,22 @@ export class CashSessionEntity {
   @Column({ type: 'varchar' })
   staffName: string;
 
+  @ApiPropertyOptional({
+    example: 'SCPS1 - Counter 1',
+    nullable: true,
+    description: 'Billing counter name captured when the register is opened.',
+  })
+  @Column({ type: 'varchar', nullable: true })
+  counterName: string | null;
+
+  @ApiPropertyOptional({
+    type: [String],
+    nullable: true,
+    description: 'Names of staff who transacted on this register/shift.',
+  })
+  @Column({ type: 'simple-array', nullable: true })
+  staffsJoined: string[] | null;
+
   @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'Linked shift, if any' })
   @Column({ type: 'uuid', nullable: true })
   shiftId: string | null;

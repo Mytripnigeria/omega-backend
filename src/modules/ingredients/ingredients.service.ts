@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository, FindOptionsWhere } from 'typeorm';
 import { IngredientEntity } from './entities/ingredient.entity';
 import { IngredientLocationStockEntity } from './entities/ingredient-location-stock.entity';
+import { InventoryLocationEntity } from '../inventory-locations/entities/inventory-location.entity';
 import {
   IngredientMovementEntity,
   MovementType,
@@ -41,6 +42,8 @@ export class IngredientsService {
     private readonly movementRepo: Repository<IngredientMovementEntity>,
     @InjectRepository(IngredientLocationStockEntity)
     private readonly locationStockRepo: Repository<IngredientLocationStockEntity>,
+    @InjectRepository(InventoryLocationEntity)
+    private readonly inventoryLocationRepo: Repository<InventoryLocationEntity>,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -116,6 +119,7 @@ export class IngredientsService {
         supplierId,
         supplierIds: supplierIds.length > 0 ? supplierIds : null,
         sku: dto.sku ?? null,
+        type: dto.type ?? 'ingredient',
         storeId: dto.storeId,
         lastRestocked: dto.lastRestocked ? new Date(dto.lastRestocked) : null,
         expiryDate: dto.expiryDate ?? null,
@@ -460,6 +464,66 @@ export class IngredientsService {
     };
     if (txManager) await run(txManager);
     else await this.dataSource.transaction(run);
+  }
+
+  /**
+   * Staff-facing location-to-location transfer for one ingredient. Enforces
+   * that the destination already stocks the item (no receivable location =
+   * no transfer), moves the stock, and records a TRANSFER movement naming the
+   * sending and receiving locations so the movement log shows both.
+   */
+  async transferToLocation(
+    actor: ActorContext,
+    ingredientId: string,
+    dto: {
+      fromLocationId: string;
+      toLocationId: string;
+      quantity: number;
+      reason?: string;
+    },
+  ): Promise<void> {
+    const dest = await this.locationStockRepo.findOne({
+      where: { ingredientId, locationId: dto.toLocationId },
+    });
+    if (!dest) {
+      throw new BadRequestException(
+        'Transfer not possible — the item is not stocked at the destination location',
+      );
+    }
+    const [fromLoc, toLoc] = await Promise.all([
+      this.inventoryLocationRepo.findOne({ where: { id: dto.fromLocationId } }),
+      this.inventoryLocationRepo.findOne({ where: { id: dto.toLocationId } }),
+    ]);
+
+    await this.dataSource.transaction(async (m) => {
+      await this.transferBetweenLocations(
+        ingredientId,
+        dto.fromLocationId,
+        dto.toLocationId,
+        dto.quantity,
+        m,
+      );
+      const ing = await m
+        .getRepository(IngredientEntity)
+        .findOne({ where: { id: ingredientId } });
+      await m.save(
+        m.create(IngredientMovementEntity, {
+          ingredientId,
+          storeId: ing?.storeId ?? '',
+          staffId: actor.sub_type === 'staff' ? actor.sub : null,
+          staffName: actor.actorName ?? null,
+          type: MovementType.TRANSFER,
+          quantity: dto.quantity,
+          previousStock: Number(ing?.currentStock ?? 0),
+          newStock: Number(ing?.currentStock ?? 0),
+          reason:
+            dto.reason ??
+            `Transfer from ${fromLoc?.name ?? dto.fromLocationId} to ${toLoc?.name ?? dto.toLocationId}`,
+          referenceType: 'location_transfer',
+          referenceId: dto.toLocationId,
+        }),
+      );
+    });
   }
 
   /**

@@ -47,12 +47,43 @@ import {
   MovementType,
 } from '../ingredients/entities/ingredient-movement.entity';
 import { IngredientLocationStockEntity } from '../ingredients/entities/ingredient-location-stock.entity';
+import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
 
 const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
-  [OrderStatus.PENDING]: [OrderStatus.PREPARING, OrderStatus.CANCELLED],
+  // INITIATED is the new entry state for every channel. A cashier Accepts
+  // (-> PENDING) or Rejects (-> CANCELLED). "Quick Bill" jumps straight to
+  // READY (skips the kitchen). PREPARING is allowed too so auto-accept can
+  // flow directly into the kitchen.
+  [OrderStatus.INITIATED]: [
+    OrderStatus.PENDING,
+    OrderStatus.PREPARING,
+    OrderStatus.READY,
+    OrderStatus.CANCELLED,
+  ],
+  // PENDING -> READY supports "Quick Bill" (skip the kitchen for ready-made
+  // items); -> PREPARING is the standard "Process Bill" kitchen flow.
+  [OrderStatus.PENDING]: [
+    OrderStatus.PREPARING,
+    OrderStatus.READY,
+    OrderStatus.CANCELLED,
+  ],
   [OrderStatus.PREPARING]: [OrderStatus.READY, OrderStatus.CANCELLED],
-  [OrderStatus.READY]: [OrderStatus.SERVED, OrderStatus.CANCELLED],
-  [OrderStatus.SERVED]: [OrderStatus.COMPLETED, OrderStatus.CANCELLED],
+  // READY -> DELIVERING (delivery, after a rider self-assigns), SERVED/COMPLETED
+  // (dine-in & takeaway). SERVED is retained for backwards compatibility.
+  [OrderStatus.READY]: [
+    OrderStatus.DELIVERING,
+    OrderStatus.SERVED,
+    OrderStatus.COMPLETED,
+    OrderStatus.CANCELLED,
+  ],
+  [OrderStatus.DELIVERING]: [OrderStatus.COMPLETED, OrderStatus.CANCELLED],
+  // SERVED → PREPARING supports the kitchen "Recall" of a recently-completed
+  // order back onto the board.
+  [OrderStatus.SERVED]: [
+    OrderStatus.PREPARING,
+    OrderStatus.COMPLETED,
+    OrderStatus.CANCELLED,
+  ],
   [OrderStatus.COMPLETED]: [],
   [OrderStatus.CANCELLED]: [],
 };
@@ -80,6 +111,8 @@ export class OrdersService {
     private readonly tableRepo: Repository<TableEntity>,
     @InjectRepository(ProductIngredientEntity)
     private readonly productIngredientRepo: Repository<ProductIngredientEntity>,
+    @InjectRepository(WorkstationSettingsEntity)
+    private readonly workstationSettingsRepo: Repository<WorkstationSettingsEntity>,
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
     private readonly customersService: CustomersService,
@@ -283,10 +316,45 @@ export class OrdersService {
     return (parseInt(row?.max ?? '0', 10) || 0) + 1;
   }
 
+  /** Reads the business' workstation auto-accept setting (defaults to false). */
+  async isAutoAcceptEnabled(businessId: string): Promise<boolean> {
+    const settings = await this.workstationSettingsRepo.findOne({
+      where: { businessId },
+    });
+    return settings?.autoAcceptOrders ?? false;
+  }
+
+  /**
+   * Resolves the status an order is created at and the chain of transition
+   * events to record. New orders default to INITIATED (awaiting acceptance in
+   * the counter POS). "accept" (cashier accepting at create) or the
+   * auto-accept setting advances to PENDING; "quickBill" advances straight to
+   * READY (skips the kitchen for ready-made items).
+   */
+  private resolveInitialStatusChain(opts: {
+    accept?: boolean;
+    quickBill?: boolean;
+    autoAccept: boolean;
+  }): OrderStatus[] {
+    const chain: OrderStatus[] = [OrderStatus.INITIATED];
+    const accepted = opts.accept || opts.quickBill || opts.autoAccept;
+    if (accepted) chain.push(OrderStatus.PENDING);
+    if (opts.quickBill) chain.push(OrderStatus.READY);
+    return chain;
+  }
+
   async create(actor: ActorContext, dto: CreateOrderDto): Promise<OrderResponseDto> {
     if (!actor.storeId) {
       throw new BadRequestException('Order requires a store context');
     }
+
+    const autoAccept = await this.isAutoAcceptEnabled(actor.businessId);
+    const statusChain = this.resolveInitialStatusChain({
+      accept: dto.accept,
+      quickBill: dto.quickBill,
+      autoAccept,
+    });
+    const initialStatus = statusChain[statusChain.length - 1];
 
     // If the order is being opened against a managed table, look it up and
     // snapshot the label so receipts/reports survive a future rename or
@@ -326,7 +394,7 @@ export class OrdersService {
         tableNumber,
         channel: dto.channel ?? 'pos',
         isDelivery: dto.isDelivery ?? false,
-        status: OrderStatus.PENDING,
+        status: initialStatus,
         subtotal,
         taxAmount,
         discountAmount,
@@ -351,15 +419,22 @@ export class OrdersService {
 
       const persisted = await manager.save(order);
 
-      await manager.save(
-        manager.create(OrderStatusEventEntity, {
-          orderId: persisted.id,
-          fromStatus: null,
-          toStatus: OrderStatus.PENDING,
-          actorId: actor.sub,
-          actorType: actor.sub_type,
-        }),
-      );
+      // Record one event per hop in the resolved status chain (e.g.
+      // null→INITIATED→PENDING→READY for a quick bill), so the timeline is
+      // accurate regardless of auto-accept / quick-bill.
+      let prev: OrderStatus | null = null;
+      for (const to of statusChain) {
+        await manager.save(
+          manager.create(OrderStatusEventEntity, {
+            orderId: persisted.id,
+            fromStatus: prev,
+            toStatus: to,
+            actorId: actor.sub,
+            actorType: actor.sub_type,
+          }),
+        );
+        prev = to;
+      }
 
       return persisted;
     });

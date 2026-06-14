@@ -6,9 +6,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import PDFDocument from 'pdfkit';
 import { CashSessionEntity } from './entities/cash-session.entity';
 import { OrderEntity } from '../orders/entities/order.entity';
 import { StaffEntity } from '../staff/entities/staff.entity';
+import { StoreEntity } from '../store/entities/store.entity';
 import {
   CashSessionFilterDto,
   CloseCashSessionDto,
@@ -42,6 +44,8 @@ export class CashSessionsService {
     private readonly orderRepo: Repository<OrderEntity>,
     @InjectRepository(StaffEntity)
     private readonly staffRepo: Repository<StaffEntity>,
+    @InjectRepository(StoreEntity)
+    private readonly storeRepo: Repository<StoreEntity>,
     private readonly activityLog: ActivityLogService,
   ) {}
 
@@ -76,6 +80,8 @@ export class CashSessionsService {
       storeId: actor.storeId,
       staffId: actor.sub,
       staffName,
+      counterName: dto.counterName ?? null,
+      staffsJoined: [staffName],
       shiftId: dto.shiftId ?? null,
       status: 'open',
       openedAt: new Date(),
@@ -294,6 +300,26 @@ export class CashSessionsService {
     return CashSessionResponseDto.from(await this.findEntity(actor, id));
   }
 
+  /** Deletes a register record (admin-only). */
+  async remove(actor: ActorContext, id: string): Promise<void> {
+    if (actor.sub_type !== 'admin') {
+      throw new ForbiddenException('Admin-only');
+    }
+    const session = await this.findEntity(actor, id);
+    await this.repo.delete(session.id);
+    this.activityLog.record({
+      actorType: 'admin',
+      actorId: actor.sub,
+      actorName: actor.actorName ?? 'Admin',
+      action: 'cash_session.deleted',
+      businessId: session.businessId,
+      storeId: session.storeId,
+      resourceType: 'cash_session',
+      resourceId: session.id,
+      metadata: { counterName: session.counterName },
+    });
+  }
+
   private async findEntity(actor: ActorContext, id: string): Promise<CashSessionEntity> {
     const session = await this.repo.findOne({ where: { id } });
     if (!session) throw new NotFoundException(`Cash session ${id} not found`);
@@ -308,6 +334,105 @@ export class CashSessionsService {
       throw new ForbiddenException('Cash session belongs to another store');
     }
     return session;
+  }
+
+  /**
+   * Aggregates paid orders on a register and renders the Register Report PDF
+   * (matches the sample: store, counter, opening/closing amounts, cash/POS
+   * breakdown with counts, order grand total).
+   */
+  async generateReportPdf(
+    actor: ActorContext,
+    id: string,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const session = await this.findEntity(actor, id);
+    const store = await this.storeRepo.findOne({
+      where: { id: session.storeId },
+    });
+    const storeName = store?.name ?? 'Store';
+    const until = session.closedAt ?? new Date();
+
+    const agg = (channels: string[]) =>
+      this.orderRepo
+        .createQueryBuilder('o')
+        .select('COALESCE(SUM(o.paidAmount), 0)', 'total')
+        .addSelect('COUNT(*)', 'count')
+        .where('o.businessId = :businessId', { businessId: session.businessId })
+        .andWhere('o.storeId = :storeId', { storeId: session.storeId })
+        .andWhere('o.staffId = :staffId', { staffId: session.staffId })
+        .andWhere('o.paymentChannel IN (:...chs)', { chs: channels })
+        .andWhere('o.paidAt >= :from', { from: session.openedAt })
+        .andWhere('o.paidAt <= :to', { to: until })
+        .getRawOne<{ total: string; count: string }>();
+
+    const cash = await agg(['cash']);
+    const pos = await agg(['card', 'paystack', 'pos']);
+    const cashAmount = Number(cash?.total ?? 0);
+    const cashCount = Number(cash?.count ?? 0);
+    const posAmount = Number(pos?.total ?? 0);
+    const posCount = Number(pos?.count ?? 0);
+    const grandTotal = cashAmount + posAmount;
+    const orderCount = cashCount + posCount;
+
+    const fmtDate = (d: Date) => {
+      const p = (n: number) => String(n).padStart(2, '0');
+      let h = d.getHours();
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12 || 12;
+      return `${p(d.getDate())}-${p(d.getMonth() + 1)}-${d.getFullYear()} ${p(h)}:${p(d.getMinutes())} ${ampm}`;
+    };
+    const money = (n: number) => n.toFixed(2);
+
+    const buffer = await new Promise<Buffer>((resolve, reject) => {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks: Buffer[] = [];
+      doc.on('data', (c: Buffer) => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      doc.fontSize(16).text('REGISTER REPORT', { align: 'left' });
+      doc.moveDown(1);
+
+      const line = (label: string, value: string) => {
+        doc.fontSize(10).text(`${label}`, { continued: true });
+        doc.text(`   ${value}`, { align: 'right' });
+      };
+      line('Store', storeName);
+      line('Billing Counter', session.counterName ?? '-');
+      line('Total Closing Amount (NGN)', money(Number(session.actualTotal)));
+      line('Total Order Count', String(orderCount));
+      doc.moveDown(0.5);
+      line('Opened By', session.staffName);
+      line('Staffs Joined In', (session.staffsJoined ?? [session.staffName]).join(', '));
+      line('Opened On', fmtDate(new Date(session.openedAt)));
+      line('Closed On', session.closedAt ? fmtDate(new Date(session.closedAt)) : '-');
+      line('Updated On', fmtDate(new Date(session.updatedAt)));
+      doc.moveDown(1);
+
+      doc.fontSize(11).text('Amount (NGN)                                Count');
+      doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+      doc.moveDown(0.3);
+      const row = (label: string, amount: string, count: string) => {
+        doc.fontSize(10).text(label, 50, doc.y, { continued: true });
+        doc.text(`${amount}        ${count}`, { align: 'right' });
+      };
+      row('Opening Amount', money(Number(session.openingFloat)), '-');
+      row('Closing Amount', money(Number(session.actualTotal)), '-');
+      row('Credit Card Slips', '-', '0');
+      row('Cheques', '-', '0');
+      row('Cash', money(cashAmount), String(cashCount));
+      row('Pos', money(posAmount), String(posCount));
+      row('Order Grand Total', money(grandTotal), String(orderCount));
+      doc.moveDown(2);
+      doc.fontSize(10).text('Thank You!', { align: 'center' });
+
+      doc.end();
+    });
+
+    return {
+      buffer,
+      filename: `register-${session.counterName ?? session.id}.pdf`,
+    };
   }
 
   async getStats(

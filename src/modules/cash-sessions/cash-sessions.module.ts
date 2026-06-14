@@ -3,13 +3,19 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CashSessionEntity } from './entities/cash-session.entity';
 import { OrderEntity } from '../orders/entities/order.entity';
 import { StaffEntity } from '../staff/entities/staff.entity';
+import { StoreEntity } from '../store/entities/store.entity';
 import { CashSessionsService } from './cash-sessions.service';
 import { CashSessionsController } from './cash-sessions.controller';
 import { ActivityLogModule } from '../activity-log/activity-log.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([CashSessionEntity, OrderEntity, StaffEntity]),
+    TypeOrmModule.forFeature([
+      CashSessionEntity,
+      OrderEntity,
+      StaffEntity,
+      StoreEntity,
+    ]),
     ActivityLogModule,
   ],
   controllers: [CashSessionsController],

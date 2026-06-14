@@ -1,16 +1,23 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { WorkstationSettingsEntity } from './entities/workstation-settings.entity';
+import { StoreEntity } from '../store/entities/store.entity';
+import { BusinessSettingsEntity } from '../business/entities/business-settings.entity';
 import { WorkstationSettingsService } from './workstation-settings.service';
 import { WorkstationSettingsController } from './workstation-settings.controller';
+import { WorkstationReceiptController } from './workstation-receipt.controller';
 import { ActivityLogModule } from '../activity-log/activity-log.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([WorkstationSettingsEntity]),
+    TypeOrmModule.forFeature([
+      WorkstationSettingsEntity,
+      StoreEntity,
+      BusinessSettingsEntity,
+    ]),
     ActivityLogModule,
   ],
-  controllers: [WorkstationSettingsController],
+  controllers: [WorkstationSettingsController, WorkstationReceiptController],
   providers: [WorkstationSettingsService],
   exports: [WorkstationSettingsService],
 })

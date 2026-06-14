@@ -13,9 +13,20 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { OrderItemEntity } from './order-item.entity';
 
 export enum OrderStatus {
+  /**
+   * Brand-new order from any channel (storefront, self-order, counter POS).
+   * Waits in the counter POS until a cashier Accepts it (-> PENDING) or
+   * Rejects it (-> CANCELLED). Auto-accept can transition it immediately.
+   */
+  INITIATED = 'initiated',
   PENDING = 'pending',
   PREPARING = 'preparing',
   READY = 'ready',
+  /**
+   * Delivery orders only: a rider has collected the order and is en route.
+   * Reached from READY once a rider self-assigns and the waiter marks served.
+   */
+  DELIVERING = 'delivering',
   SERVED = 'served',
   COMPLETED = 'completed',
   CANCELLED = 'cancelled',
@@ -92,8 +103,8 @@ export class OrderEntity {
   @Column({ default: false })
   isDelivery: boolean;
 
-  @ApiProperty({ enum: OrderStatus, example: OrderStatus.PENDING })
-  @Column({ type: 'enum', enum: OrderStatus, default: OrderStatus.PENDING })
+  @ApiProperty({ enum: OrderStatus, example: OrderStatus.INITIATED })
+  @Column({ type: 'enum', enum: OrderStatus, default: OrderStatus.INITIATED })
   @Index()
   status: OrderStatus;
 

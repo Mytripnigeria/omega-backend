@@ -57,6 +57,16 @@ export class IngredientEntity {
   @Column({ type: 'varchar', nullable: true })
   sku!: string | null;
 
+  @ApiPropertyOptional({
+    example: 'ingredient',
+    nullable: true,
+    description:
+      'Inventory variant/type — e.g. ingredient, packaging, premix, hygiene. ' +
+      'All ingredients are inventories but not all inventories are ingredients.',
+  })
+  @Column({ type: 'varchar', nullable: true, default: 'ingredient' })
+  type!: string | null;
+
   @ApiProperty({ format: 'uuid', example: 'c2d3e4f5-1234-4f1a-8c3e-9a4f0c4e2b21' })
   @Column()
   storeId: string;

@@ -1,6 +1,9 @@
 import {
+  ArrayUnique,
+  IsArray,
   IsBoolean,
   IsEnum,
+  IsIn,
   IsInt,
   IsObject,
   IsOptional,
@@ -12,17 +15,29 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreatePaymentMethodDto {
   @ApiProperty({
-    enum: ['cash', 'card', 'transfer', 'pos', 'mobile_money', 'other'],
+    enum: ['cash', 'card', 'transfer', 'pos', 'mobile_money', 'wallet', 'other'],
     example: 'transfer',
     description: 'Payment method type',
   })
-  @IsEnum(['cash', 'card', 'transfer', 'pos', 'mobile_money', 'other'])
-  type: 'cash' | 'card' | 'transfer' | 'pos' | 'mobile_money' | 'other';
+  @IsEnum(['cash', 'card', 'transfer', 'pos', 'mobile_money', 'wallet', 'other'])
+  type: 'cash' | 'card' | 'transfer' | 'pos' | 'mobile_money' | 'wallet' | 'other';
 
   @ApiProperty({ example: 'Bank Transfer', maxLength: 80, description: 'Display label shown on the POS payment screen' })
   @IsString()
   @MaxLength(80)
   label: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['pos', 'self', 'storefront', 'omni'],
+    description:
+      'Channels this method shows on: pos, self, storefront, omni. Defaults to all.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsIn(['pos', 'self', 'storefront', 'omni'], { each: true })
+  visibility?: string[];
 
   @ApiPropertyOptional({ example: true, description: 'Whether this payment method is currently enabled' })
   @IsOptional()

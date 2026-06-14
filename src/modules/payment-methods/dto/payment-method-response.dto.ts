@@ -11,7 +11,7 @@ export class PaymentMethodResponseDto {
   @Expose()
   businessId: string;
 
-  @ApiProperty({ enum: ['cash', 'card', 'transfer', 'pos', 'mobile_money', 'other'], example: 'transfer' })
+  @ApiProperty({ enum: ['cash', 'card', 'transfer', 'pos', 'mobile_money', 'wallet', 'other'], example: 'transfer' })
   @Expose()
   type: PaymentMethodType;
 
@@ -22,6 +22,10 @@ export class PaymentMethodResponseDto {
   @ApiProperty({ example: true })
   @Expose()
   isEnabled: boolean;
+
+  @ApiProperty({ type: [String], example: ['pos', 'self', 'storefront', 'omni'] })
+  @Expose()
+  visibility: string[];
 
   @ApiPropertyOptional({
     type: 'object',

@@ -210,6 +210,19 @@ export class DeliveriesService {
     delivery.pickedUpAt = new Date();
     await this.repo.save(delivery);
 
+    // The order is now out for delivery.
+    const pickedOrder = await this.orderRepo.findOne({
+      where: { id: delivery.orderId },
+    });
+    if (
+      pickedOrder &&
+      (pickedOrder.status === OrderStatus.READY ||
+        pickedOrder.status === OrderStatus.PREPARING)
+    ) {
+      pickedOrder.status = OrderStatus.DELIVERING;
+      await this.orderRepo.save(pickedOrder);
+    }
+
     this.activityLog.record({
       actorType: actor.sub_type,
       actorId: actor.sub,
@@ -234,10 +247,14 @@ export class DeliveriesService {
     delivery.deliveredAt = new Date();
     await this.repo.save(delivery);
 
-    // Mark the order as served (ready -> served) once delivered.
+    // Completing the delivery completes the order (delivering -> completed).
     const order = await this.orderRepo.findOne({ where: { id: delivery.orderId } });
-    if (order && (order.status === OrderStatus.READY || order.status === OrderStatus.PREPARING)) {
-      order.status = OrderStatus.SERVED;
+    if (
+      order &&
+      order.status !== OrderStatus.COMPLETED &&
+      order.status !== OrderStatus.CANCELLED
+    ) {
+      order.status = OrderStatus.COMPLETED;
       await this.orderRepo.save(order);
     }
 

@@ -53,3 +53,23 @@ export class TransferStockDto {
   @IsString()
   reason?: string;
 }
+
+export class TransferToLocationDto {
+  @ApiProperty({ format: 'uuid', description: 'Source inventory location (debited)' })
+  @IsUUID()
+  fromLocationId: string;
+
+  @ApiProperty({ format: 'uuid', description: 'Destination inventory location (credited) — must already stock this item' })
+  @IsUUID()
+  toLocationId: string;
+
+  @ApiProperty({ example: 5.0 })
+  @IsNumber()
+  @Min(0)
+  quantity: number;
+
+  @ApiPropertyOptional({ example: 'Move to out-store for service' })
+  @IsOptional()
+  @IsString()
+  reason?: string;
+}
