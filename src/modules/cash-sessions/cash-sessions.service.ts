@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import PDFDocument from 'pdfkit';
+import PDFDocument = require('pdfkit');
 import { CashSessionEntity } from './entities/cash-session.entity';
 import { OrderEntity } from '../orders/entities/order.entity';
 import { StaffEntity } from '../staff/entities/staff.entity';
@@ -366,7 +366,7 @@ export class CashSessionsService {
         .getRawOne<{ total: string; count: string }>();
 
     const cash = await agg(['cash']);
-    const pos = await agg(['card', 'paystack', 'pos']);
+    const pos = await agg(['card', 'paystack']);
     const cashAmount = Number(cash?.total ?? 0);
     const cashCount = Number(cash?.count ?? 0);
     const posAmount = Number(pos?.total ?? 0);
