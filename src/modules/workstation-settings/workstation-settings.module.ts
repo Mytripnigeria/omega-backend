@@ -5,7 +5,10 @@ import { StoreEntity } from '../store/entities/store.entity';
 import { BusinessSettingsEntity } from '../business/entities/business-settings.entity';
 import { WorkstationSettingsService } from './workstation-settings.service';
 import { WorkstationSettingsController } from './workstation-settings.controller';
-import { WorkstationReceiptController } from './workstation-receipt.controller';
+import {
+  WorkstationFunctionAccessController,
+  WorkstationReceiptController,
+} from './workstation-receipt.controller';
 import { ActivityLogModule } from '../activity-log/activity-log.module';
 
 @Module({
@@ -17,7 +20,11 @@ import { ActivityLogModule } from '../activity-log/activity-log.module';
     ]),
     ActivityLogModule,
   ],
-  controllers: [WorkstationSettingsController, WorkstationReceiptController],
+  controllers: [
+    WorkstationSettingsController,
+    WorkstationReceiptController,
+    WorkstationFunctionAccessController,
+  ],
   providers: [WorkstationSettingsService],
   exports: [WorkstationSettingsService],
 })

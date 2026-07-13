@@ -8,6 +8,8 @@ import * as bcrypt from 'bcrypt';
 import { ConfigService } from '@nestjs/config';
 import { StaffEntity } from './entities/staff.entity';
 import { StaffDocumentEntity } from './entities/staff-document.entity';
+import { StoreEntity } from '../store/entities/store.entity';
+import { BusinessSettingsEntity } from '../business/entities/business-settings.entity';
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { UpdateStaffDto } from './dto/update-staff.dto';
 import { SetPinDto } from './dto/set-pin.dto';
@@ -31,22 +33,50 @@ export class StaffService {
     private readonly staffRepo: Repository<StaffEntity>,
     @InjectRepository(StaffDocumentEntity)
     private readonly docRepo: Repository<StaffDocumentEntity>,
+    @InjectRepository(StoreEntity)
+    private readonly storeRepo: Repository<StoreEntity>,
+    @InjectRepository(BusinessSettingsEntity)
+    private readonly businessSettingsRepo: Repository<BusinessSettingsEntity>,
     private readonly configService: ConfigService,
   ) {}
 
-  private async generateStaffCode(): Promise<string> {
+  /**
+   * Resolves the staff-code prefix for a store's business (configurable in
+   * Settings → staffCodePrefix, default "STF").
+   */
+  private async resolvePrefix(storeId: string): Promise<string> {
+    const store = await this.storeRepo.findOne({ where: { id: storeId } });
+    if (!store?.businessId) return 'STF';
+    const settings = await this.businessSettingsRepo.findOne({
+      where: { businessId: store.businessId },
+    });
+    return settings?.staffCodePrefix?.trim() || 'STF';
+  }
+
+  /**
+   * Next monotonic staff code for a prefix, e.g. "MJS" → MJS001. The counter is
+   * per-prefix: we only consider existing codes shaped `<prefix><digits>`, then
+   * take the max numeric suffix (+1). `withDeleted` so soft-deleted codes are
+   * never reused.
+   */
+  private async generateStaffCode(prefix: string): Promise<string> {
     const result = await this.staffRepo
       .createQueryBuilder('s')
       .withDeleted()
-      .select("MAX(CAST(SUBSTRING(s.staffCode, 4) AS INTEGER))", 'maxNum')
+      .where("s.staffCode ~ :re", { re: `^${prefix}[0-9]+$` })
+      .select(
+        `MAX(CAST(SUBSTRING(s.staffCode, ${prefix.length + 1}) AS INTEGER))`,
+        'maxNum',
+      )
       .getRawOne<{ maxNum: number | null }>();
 
     const next = (result?.maxNum ?? 0) + 1;
-    return `STF${String(next).padStart(3, '0')}`;
+    return `${prefix}${String(next).padStart(3, '0')}`;
   }
 
   async create(dto: CreateStaffDto): Promise<StaffResponseDto> {
-    const staffCode = await this.generateStaffCode();
+    const prefix = await this.resolvePrefix(dto.storeId);
+    const staffCode = await this.generateStaffCode(prefix);
     const staff = this.staffRepo.create({ ...dto, staffCode });
     const saved = await this.staffRepo.save(staff);
     return this.findOne(saved.id);

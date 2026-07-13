@@ -51,6 +51,10 @@ export class BusinessSettingsResponseDto {
   @Expose()
   taxRate: number;
 
+  @ApiProperty({ example: 'STF', description: 'Prefix for auto-generated staff codes' })
+  @Expose()
+  staffCodePrefix: string;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)

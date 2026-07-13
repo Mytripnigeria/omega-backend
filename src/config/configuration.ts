@@ -46,4 +46,11 @@ export default () => ({
     password: process.env.REDIS_PASSWORD || undefined,
     tls: process.env.REDIS_TLS === 'true',
   },
+  domains: {
+    // Hostname merchants point their custom domain's CNAME at. This is the
+    // public storefront ingress and is environment-specific — override per
+    // deployment so the DNS instructions returned on domain creation point at
+    // the right host. Defaults to the production storefront ingress.
+    cnameTarget: process.env.DOMAIN_CNAME_TARGET ?? 'app.mrjollof.com',
+  },
 });

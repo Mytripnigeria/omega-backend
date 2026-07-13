@@ -6,7 +6,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { JwtOrStaffGuard } from '../../common/guards/jwt-or-staff.guard';
-import { BusinessId } from '../../common/decorators/business-id.decorator';
+import { BusinessContext } from '../../common/decorators/business-context.decorator';
 import { IntegrationsService } from '../integrations/integrations.service';
 
 @ApiTags('paystack')
@@ -28,7 +28,7 @@ export class PaystackController {
   })
   @Get('public-key')
   async publicKey(
-    @BusinessId() businessId: string,
+    @BusinessContext() businessId: string,
   ): Promise<{ publicKey: string }> {
     const cred = await this.integrations.getActiveCredential(
       businessId,

@@ -84,6 +84,19 @@ export class CashSessionsController {
   }
 
   @ApiOperation({
+    summary: 'Open registers on my store I can join (staff)',
+    description:
+      "Returns open registers on the staff member's store that they have not " +
+      "opened or already joined — so a cashier can join a colleague's open " +
+      'register instead of opening a new one.',
+  })
+  @ApiOkResponse({ type: [CashSessionResponseDto] })
+  @Get('store-active')
+  storeActive(@Req() req: AuthedRequest) {
+    return this.service.storeActive(actorFrom(req));
+  }
+
+  @ApiOperation({
     summary: 'List cash sessions',
     description:
       'Paginated list of cash sessions. Staff are auto-scoped to their store.',
@@ -144,6 +157,19 @@ export class CashSessionsController {
       'Content-Length': buffer.length,
     });
     res.end(buffer);
+  }
+
+  @ApiOperation({
+    summary: 'Join an open register (staff)',
+    description:
+      'Adds the current staff member to an open register on their store so ' +
+      'they can transact on it. Idempotent.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiOkResponse({ type: CashSessionResponseDto })
+  @Post(':id/join')
+  join(@Req() req: AuthedRequest, @Param('id') id: string) {
+    return this.service.join(actorFrom(req), id);
   }
 
   @ApiOperation({

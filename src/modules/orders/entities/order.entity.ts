@@ -108,6 +108,43 @@ export class OrderEntity {
   @Index()
   status: OrderStatus;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 20,
+    description:
+      'Estimated preparation time in minutes for the whole order — the prep ' +
+      'time of the item with the longest prep time. Computed at create.',
+  })
+  @Column({ type: 'int', nullable: true })
+  estimatedPrepMinutes: number | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description:
+      'When the order entered PREPARING. The kitchen countdown anchors on ' +
+      'this so it only starts ticking once prep actually begins.',
+  })
+  @Column({ type: 'timestamptz', nullable: true })
+  preparingStartedAt: Date | null;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description: 'Staff member who moved the order into PREPARING.',
+  })
+  @Column({ type: 'uuid', nullable: true })
+  preparingStaffId: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Jenifer Okpe',
+    description: 'Display name of whoever moved the order into PREPARING.',
+  })
+  @Column({ type: 'varchar', nullable: true })
+  preparingStaffName: string | null;
+
   @ApiProperty({ example: 4500 })
   @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
   subtotal: number;

@@ -10,6 +10,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { ShiftEntity, ShiftStatus } from './entities/shift.entity';
+import { StaffEntity } from '../staff/entities/staff.entity';
+import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
+import { assertWithinGeofence } from '../../common/utils/geofence';
 import { CreateShiftDto } from './dto/create-shift.dto';
 import { UpdateShiftDto } from './dto/update-shift.dto';
 import { ShiftFilterDto } from './dto/shift-filter.dto';
@@ -29,6 +32,10 @@ export class ShiftsService implements OnModuleInit {
   constructor(
     @InjectRepository(ShiftEntity)
     private readonly shiftRepo: Repository<ShiftEntity>,
+    @InjectRepository(StaffEntity)
+    private readonly staffRepo: Repository<StaffEntity>,
+    @InjectRepository(WorkstationSettingsEntity)
+    private readonly workstationSettingsRepo: Repository<WorkstationSettingsEntity>,
     private readonly activityLog: ActivityLogService,
     private readonly cashSessions: CashSessionsService,
   ) {}
@@ -90,7 +97,14 @@ export class ShiftsService implements OnModuleInit {
   }
 
   async create(dto: CreateShiftDto): Promise<ShiftResponseDto> {
-    const shift = this.shiftRepo.create(dto);
+    // Default the shift's role to the staff member's own role unless a
+    // particular role was set when creating the shift.
+    let roleId = dto.roleId ?? null;
+    if (!roleId) {
+      const staff = await this.staffRepo.findOne({ where: { id: dto.staffId } });
+      roleId = staff?.roleId ?? null;
+    }
+    const shift = this.shiftRepo.create({ ...dto, roleId: roleId ?? undefined });
     const saved = await this.shiftRepo.save(shift);
     return this.findOne(saved.id);
   }
@@ -150,6 +164,7 @@ export class ShiftsService implements OnModuleInit {
   async clockIn(
     shiftId: string,
     staff: { sub: string; businessId: string; storeId: string },
+    coords?: { latitude?: number; longitude?: number },
   ): Promise<ShiftResponseDto> {
     const shift = await this.findEntityWithRelations(shiftId);
     if (shift.staffId !== staff.sub) {
@@ -158,6 +173,12 @@ export class ShiftsService implements OnModuleInit {
     if (shift.status !== ShiftStatus.SCHEDULED) {
       throw new BadRequestException(`Cannot clock in: shift is ${shift.status}`);
     }
+
+    // Apply the merchant's geofencing rule (Workstation Settings) on clock-in.
+    const wsSettings = await this.workstationSettingsRepo.findOne({
+      where: { businessId: staff.businessId },
+    });
+    assertWithinGeofence(wsSettings, coords, 'clock in');
 
     shift.actualClockIn = new Date();
     shift.status = ShiftStatus.IN_PROGRESS;

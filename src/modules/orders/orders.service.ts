@@ -41,13 +41,19 @@ import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.servic
 import { TableEntity, TableStatus } from '../tables/entities/table.entity';
 import { PushService } from '../push-notifications/push.service';
 import { ProductIngredientEntity } from '../products/entities/product-ingredient.entity';
+import { ProductEntity } from '../products/entities/product.entity';
 import { IngredientEntity } from '../ingredients/entities/ingredient.entity';
 import {
   IngredientMovementEntity,
   MovementType,
 } from '../ingredients/entities/ingredient-movement.entity';
 import { IngredientLocationStockEntity } from '../ingredients/entities/ingredient-location-stock.entity';
+import { InventoryLocationType } from '../inventory-locations/entities/inventory-location.entity';
 import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
+import {
+  DeliveryEntity,
+  DeliveryStatus,
+} from '../deliveries/entities/delivery.entity';
 
 const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   // INITIATED is the new entry state for every channel. A cashier Accepts
@@ -111,6 +117,10 @@ export class OrdersService {
     private readonly tableRepo: Repository<TableEntity>,
     @InjectRepository(ProductIngredientEntity)
     private readonly productIngredientRepo: Repository<ProductIngredientEntity>,
+    @InjectRepository(ProductEntity)
+    private readonly productRepo: Repository<ProductEntity>,
+    @InjectRepository(DeliveryEntity)
+    private readonly deliveryRepo: Repository<DeliveryEntity>,
     @InjectRepository(WorkstationSettingsEntity)
     private readonly workstationSettingsRepo: Repository<WorkstationSettingsEntity>,
     private readonly dataSource: DataSource,
@@ -185,18 +195,29 @@ export class OrdersService {
       const previousStock = Number(ing.currentStock);
       const newStock = previousStock - need;
 
-      // Pick the location row holding the most stock; orders don't bind to a
-      // specific location, so this is the most defensible heuristic.
+      // Deductions come from 'Out-Store' locations only (client spec: In-Store
+      // holds bulk stock and merely transfers to Out-Store, which is what the
+      // kitchen actually consumes). Among the out-store rows, debit the one
+      // holding the most stock; orders don't bind to a specific location. If
+      // the ingredient has no out-store row at all, fall back to the previous
+      // most-stock-anywhere heuristic so aggregates never drift.
       const locationRows = await locationStockRepo.find({
         where: { ingredientId },
+        relations: ['location'],
       });
+      let consumedFromName: string | null = null;
       if (locationRows.length > 0) {
-        locationRows.sort(
+        const outstoreRows = locationRows.filter(
+          (r) => r.location?.type === InventoryLocationType.OUTSTORE,
+        );
+        const candidates = outstoreRows.length > 0 ? outstoreRows : locationRows;
+        candidates.sort(
           (a, b) => Number(b.currentStock) - Number(a.currentStock),
         );
-        const target = locationRows[0];
+        const target = candidates[0];
         target.currentStock = Number(target.currentStock) - need;
         await locationStockRepo.save(target);
+        consumedFromName = target.location?.name ?? null;
       }
 
       ing.currentStock = newStock;
@@ -212,6 +233,7 @@ export class OrdersService {
           quantity: -need,
           previousStock,
           newStock,
+          fromLocationName: consumedFromName,
           reason: `Order #${order.orderNumber}`,
           referenceType: 'order',
           referenceId: order.id,
@@ -343,6 +365,82 @@ export class OrdersService {
     return chain;
   }
 
+  /**
+   * Parses a free-text product prep time (e.g. "15 mins", "1 hr", "20") into a
+   * number of minutes. Returns 0 when nothing parseable is found.
+   */
+  private parsePrepMinutes(prepTime?: string | null): number {
+    if (!prepTime) return 0;
+    const text = prepTime.toLowerCase();
+    const match = text.match(/[\d.]+/);
+    const num = match ? parseFloat(match[0]) : 0;
+    if (!Number.isFinite(num) || num <= 0) return 0;
+    // Treat "h"/"hr"/"hour" as hours; otherwise minutes.
+    return /h(ou)?r?s?\b/.test(text) ? Math.round(num * 60) : Math.round(num);
+  }
+
+  /**
+   * Order prep time = the longest single item prep time (per client spec:
+   * "the prep time of an order is the prep time from the item with the longest
+   * prep time"), looked up from each line's product. Null when no product
+   * carries a parseable prep time.
+   */
+  private async computeEstimatedPrepMinutes(
+    manager: import('typeorm').EntityManager,
+    items: { productId?: string | null }[],
+  ): Promise<number | null> {
+    const productIds = Array.from(
+      new Set(items.map((i) => i.productId).filter((id): id is string => !!id)),
+    );
+    if (productIds.length === 0) return null;
+    const products = await manager
+      .getRepository(ProductEntity)
+      .find({ where: productIds.map((id) => ({ id })) });
+    let max = 0;
+    for (const p of products) {
+      const mins = this.parsePrepMinutes(p.prepTime);
+      if (mins > max) max = mins;
+    }
+    return max > 0 ? max : null;
+  }
+
+  /**
+   * Auto-creates a PENDING delivery when a delivery order becomes READY, so it
+   * surfaces on the workstation Delivery "Available to accept" tab for a rider.
+   * No-op when a delivery already exists for the order (idempotent).
+   */
+  private async ensureDeliveryForOrder(
+    m: import('typeorm').EntityManager,
+    order: OrderEntity,
+  ): Promise<void> {
+    const repo = m.getRepository(DeliveryEntity);
+    const existing = await repo.findOne({ where: { orderId: order.id } });
+    if (existing) return;
+
+    const addr = (order.deliveryAddress ?? {}) as Record<string, unknown>;
+    const str = (v: unknown): string | undefined =>
+      typeof v === 'string' && v.trim() ? v.trim() : undefined;
+    const num = (v: unknown): number | null =>
+      typeof v === 'number' && Number.isFinite(v) ? v : null;
+    const address =
+      [str(addr.line1), str(addr.city), str(addr.state)]
+        .filter(Boolean)
+        .join(', ') || 'Delivery address';
+
+    await repo.save(
+      repo.create({
+        orderId: order.id,
+        businessId: order.businessId,
+        storeId: order.storeId,
+        address,
+        phone: order.customerPhone ?? null,
+        latitude: num(addr.lat) ?? num(addr.latitude),
+        longitude: num(addr.lng) ?? num(addr.longitude),
+        status: DeliveryStatus.PENDING,
+      }),
+    );
+  }
+
   async create(actor: ActorContext, dto: CreateOrderDto): Promise<OrderResponseDto> {
     if (!actor.storeId) {
       throw new BadRequestException('Order requires a store context');
@@ -380,6 +478,10 @@ export class OrdersService {
 
     const saved = await this.dataSource.transaction(async (manager) => {
       const orderNumber = await this.nextOrderNumber(manager, actor.storeId!);
+      const estimatedPrepMinutes = await this.computeEstimatedPrepMinutes(
+        manager,
+        dto.items,
+      );
 
       const order = manager.create(OrderEntity, {
         orderNumber,
@@ -395,6 +497,7 @@ export class OrdersService {
         channel: dto.channel ?? 'pos',
         isDelivery: dto.isDelivery ?? false,
         status: initialStatus,
+        estimatedPrepMinutes,
         subtotal,
         taxAmount,
         discountAmount,
@@ -434,6 +537,12 @@ export class OrdersService {
           }),
         );
         prev = to;
+      }
+
+      // Quick Bill can create a delivery order already at READY (skipping the
+      // kitchen) — make it available to riders immediately.
+      if (initialStatus === OrderStatus.READY && (dto.isDelivery ?? false)) {
+        await this.ensureDeliveryForOrder(manager, persisted);
       }
 
       return persisted;
@@ -580,8 +689,35 @@ export class OrdersService {
       );
     }
 
+    // DELIVERING is exclusive to delivery orders, and only once a rider has
+    // actually accepted the order (client spec: "Send for delivery" can only
+    // happen after a rider assigned themselves).
+    if (dto.status === OrderStatus.DELIVERING) {
+      if (!order.isDelivery) {
+        throw new BadRequestException(
+          'Only delivery orders can move to delivering',
+        );
+      }
+      const delivery = await this.dataSource
+        .getRepository(DeliveryEntity)
+        .findOne({ where: { orderId: order.id } });
+      if (!delivery?.riderStaffId) {
+        throw new BadRequestException(
+          'A rider must accept this order before it can go out for delivery',
+        );
+      }
+    }
+
     const fromStatus = order.status;
     order.status = dto.status;
+
+    // Anchor the kitchen countdown to when prep actually begins, and record
+    // who started preparing (shown on the kitchen card).
+    if (dto.status === OrderStatus.PREPARING && !order.preparingStartedAt) {
+      order.preparingStartedAt = new Date();
+      order.preparingStaffId = actor.sub_type === 'staff' ? actor.sub : null;
+      order.preparingStaffName = actor.actorName ?? null;
+    }
 
     await this.dataSource.transaction(async (m) => {
       await m.save(order);
@@ -594,6 +730,11 @@ export class OrdersService {
           actorType: actor.sub_type,
         }),
       );
+      // A delivery order that's READY becomes available for a rider to accept
+      // — make sure a delivery record exists so it shows on the Delivery board.
+      if (dto.status === OrderStatus.READY && order.isDelivery) {
+        await this.ensureDeliveryForOrder(m, order);
+      }
       // Auto-deduct recipe ingredients from inventory on completion. Runs
       // inside the same tx so an ingredient failure rolls the status back.
       if (dto.status === OrderStatus.COMPLETED) {

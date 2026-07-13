@@ -76,6 +76,22 @@ export class IngredientMovementEntity {
   @Column({ type: 'uuid', nullable: true })
   referenceId: string | null;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Main store',
+    description: 'Sending location name (set for TRANSFER movements).',
+  })
+  @Column({ type: 'varchar', nullable: true })
+  fromLocationName: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Kitchen store',
+    description: 'Receiving location name (set for TRANSFER movements).',
+  })
+  @Column({ type: 'varchar', nullable: true })
+  toLocationName: string | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn()
   createdAt: Date;

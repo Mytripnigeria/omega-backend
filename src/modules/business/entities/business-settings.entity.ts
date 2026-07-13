@@ -69,6 +69,16 @@ export class BusinessSettingsEntity {
   @Column({ type: 'decimal', precision: 5, scale: 4, default: 0.075 })
   taxRate: number;
 
+  @ApiProperty({
+    example: 'MJS',
+    default: 'STF',
+    description:
+      'Prefix for auto-generated staff codes (e.g. "MJS" → MJS001). New staff ' +
+      'only; existing codes are not renumbered.',
+  })
+  @Column({ type: 'varchar', length: 6, default: 'STF' })
+  staffCodePrefix: string;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn()
   createdAt: Date;

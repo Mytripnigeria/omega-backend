@@ -2,8 +2,9 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsString, Matches } from 'class-validator';
 
 export class StaffLookupDto {
-  @ApiProperty({ example: 'STF001' })
+  // Prefix is merchant-configurable (default STF, e.g. MJS001).
+  @ApiProperty({ example: 'MJS001' })
   @IsString()
-  @Matches(/^STF\d+$/, { message: 'Invalid staff code format' })
+  @Matches(/^[A-Za-z0-9]+$/, { message: 'Invalid staff code format' })
   staffCode: string;
 }

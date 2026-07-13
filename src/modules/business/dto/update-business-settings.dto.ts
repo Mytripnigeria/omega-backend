@@ -72,4 +72,17 @@ export class UpdateBusinessSettingsDto {
   @Min(0)
   @Max(1)
   taxRate?: number;
+
+  @ApiPropertyOptional({
+    example: 'MJS',
+    description:
+      'Prefix for auto-generated staff codes (1–6 letters/digits, e.g. "MJS" → ' +
+      'MJS001). Applies to newly created staff only.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z0-9]{1,6}$/, {
+    message: 'staffCodePrefix must be 1–6 letters or digits',
+  })
+  staffCodePrefix?: string;
 }

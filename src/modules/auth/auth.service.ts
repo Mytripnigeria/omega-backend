@@ -33,6 +33,8 @@ import {
   StorefrontRegisterDto,
 } from './dto/storefront-register.dto';
 import { StorefrontGoogleAuthDto } from './dto/google-auth.dto';
+import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
+import { assertWithinGeofence } from '../../common/utils/geofence';
 import {
   RequestPhoneOtpDto,
   VerifyPhoneOtpDto,
@@ -96,6 +98,8 @@ export class AuthService {
     private readonly referralsService: ReferralsService,
     @InjectRepository(PhoneOtpEntity)
     private readonly phoneOtpRepo: Repository<PhoneOtpEntity>,
+    @InjectRepository(WorkstationSettingsEntity)
+    private readonly workstationSettingsRepo: Repository<WorkstationSettingsEntity>,
     @Inject(SmsService)
     private readonly smsService: SmsService,
     private readonly dataSource: DataSource,
@@ -342,6 +346,17 @@ export class AuthService {
     if (!businessId) {
       throw new UnauthorizedException('Staff is not assigned to a store');
     }
+
+    // Geofencing: when the merchant restricts login to the work environment,
+    // require the device's coordinates to fall inside the configured radius.
+    const wsSettings = await this.workstationSettingsRepo.findOne({
+      where: { businessId },
+    });
+    assertWithinGeofence(
+      wsSettings,
+      { latitude: dto.latitude, longitude: dto.longitude },
+      'log in',
+    );
 
     const payload: StaffJwtPayload = {
       sub: staff.id,

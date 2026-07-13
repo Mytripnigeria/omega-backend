@@ -26,4 +26,12 @@ export class FilterIngredientDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   status?: string;
+
+  @ApiPropertyOptional({
+    example: 'ingredient',
+    description: 'Filter by inventory variant/type: ingredient, packaging, premix, hygiene, etc.',
+  })
+  @IsOptional()
+  @IsString()
+  type?: string;
 }

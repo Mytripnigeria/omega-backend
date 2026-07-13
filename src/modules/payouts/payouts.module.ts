@@ -9,6 +9,7 @@ import { PayoutsProcessor } from './payouts.processor';
 import { PaystackModule } from '../paystack/paystack.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
 import { ActivityLogModule } from '../activity-log/activity-log.module';
+import { FinancialTransactionsModule } from '../financial-transactions/financial-transactions.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { ActivityLogModule } from '../activity-log/activity-log.module';
     PaystackModule,
     IntegrationsModule,
     ActivityLogModule,
+    FinancialTransactionsModule,
     // MerchantWalletModule is @Global so we don't need to import it.
   ],
   controllers: [PayoutsController],

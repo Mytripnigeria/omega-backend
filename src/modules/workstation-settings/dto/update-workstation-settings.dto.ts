@@ -5,6 +5,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsNumber,
   IsObject,
   IsOptional,
   IsString,
@@ -170,4 +171,30 @@ export class UpdateWorkstationSettingsDto {
   @Min(1)
   @Max(60)
   autoSyncMinutes?: number;
+
+  @ApiPropertyOptional({ example: false, description: 'Restrict staff login/clock-in to the geofence.' })
+  @IsOptional()
+  @IsBoolean()
+  geofenceEnabled?: boolean;
+
+  @ApiPropertyOptional({ example: 6.5244, minimum: -90, maximum: 90 })
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  geofenceLatitude?: number;
+
+  @ApiPropertyOptional({ example: 3.3792, minimum: -180, maximum: 180 })
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  geofenceLongitude?: number;
+
+  @ApiPropertyOptional({ example: 100, minimum: 10, maximum: 100000, description: 'Geofence radius in metres.' })
+  @IsOptional()
+  @IsInt()
+  @Min(10)
+  @Max(100000)
+  geofenceRadiusMeters?: number;
 }

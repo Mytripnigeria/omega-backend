@@ -89,6 +89,18 @@ export class ChecklistsController {
     return this.service.findOne(actorFrom(req), id);
   }
 
+  @ApiOperation({
+    summary: 'Per-assignee performance for a checklist',
+    description:
+      'How each assigned staff member has filled this checklist in the current ' +
+      'recurrence period — powers the per-assignee modal in the merchant hub.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @Get(':id/performances')
+  performances(@Req() req: AuthedRequest, @Param('id') id: string) {
+    return this.service.getPerformances(actorFrom(req), id);
+  }
+
   @ApiOperation({ summary: 'Create a checklist (admin)' })
   @ApiCreatedResponse({ type: ChecklistResponseDto })
   @UseGuards(JwtAuthGuard)
