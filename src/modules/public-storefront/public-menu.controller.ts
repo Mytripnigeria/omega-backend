@@ -95,14 +95,14 @@ export class PublicMenuController {
     const slots: { startsAt: string; endsAt: string }[] = [];
 
     // Scheduling window is intentionally tighter than the raw opening hours:
-    // the first selectable time is 30 min AFTER opening and the last slot must
-    // end no later than 30 min BEFORE closing (kitchen prep / wind-down buffer).
+    // the first selectable time is 30 min AFTER opening and the last selectable
+    // time is 30 min BEFORE closing (kitchen prep / wind-down buffer).
     const earliest = new Date(target);
     earliest.setHours(oh, om, 0, 0);
     earliest.setTime(earliest.getTime() + stepMin * 60_000);
-    const lastEnd = new Date(target);
-    lastEnd.setHours(ch, cm, 0, 0);
-    lastEnd.setTime(lastEnd.getTime() - stepMin * 60_000);
+    const lastStart = new Date(target);
+    lastStart.setHours(ch, cm, 0, 0);
+    lastStart.setTime(lastStart.getTime() - stepMin * 60_000);
 
     let cursor = new Date(earliest);
     if (isToday && cursor < now) {
@@ -113,7 +113,7 @@ export class PublicMenuController {
       if (minsPast > 0) nowRounded.setMinutes(nowRounded.getMinutes() + (stepMin - minsPast));
       if (nowRounded > cursor) cursor = nowRounded;
     }
-    while (cursor.getTime() + stepMin * 60_000 <= lastEnd.getTime()) {
+    while (cursor.getTime() <= lastStart.getTime()) {
       const next = new Date(cursor.getTime() + stepMin * 60_000);
       slots.push({ startsAt: cursor.toISOString(), endsAt: next.toISOString() });
       cursor = next;

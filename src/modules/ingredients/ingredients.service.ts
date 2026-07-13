@@ -151,12 +151,13 @@ export class IngredientsService {
   }
 
   async findAll(query: FilterIngredientDto): Promise<PaginatedResponseDto<IngredientResponseDto>> {
-    const { page = 1, limit = 20, storeId, locationId, search, status } = query;
+    const { page = 1, limit = 20, storeId, locationId, search, status, type } = query;
 
     const qb = this.ingredientRepo.createQueryBuilder('i');
     if (storeId) qb.andWhere('i.storeId = :storeId', { storeId });
     if (search) qb.andWhere('i.name ILIKE :search', { search: `%${search}%` });
     if (status === 'low') qb.andWhere('i.currentStock <= i.minStock');
+    if (type) qb.andWhere('i.type = :type', { type });
     if (locationId) {
       // Only return ingredients with a stock entry at the selected location.
       // INNER JOIN keeps the pagination math correct vs a LEFT JOIN.
@@ -521,6 +522,8 @@ export class IngredientsService {
             `Transfer from ${fromLoc?.name ?? dto.fromLocationId} to ${toLoc?.name ?? dto.toLocationId}`,
           referenceType: 'location_transfer',
           referenceId: dto.toLocationId,
+          fromLocationName: fromLoc?.name ?? null,
+          toLocationName: toLoc?.name ?? null,
         }),
       );
     });

@@ -54,6 +54,14 @@ export class IngredientMovementResponseDto {
   @Expose()
   referenceId: string | null;
 
+  @ApiPropertyOptional({ nullable: true, description: 'Sending location (transfers)' })
+  @Expose()
+  fromLocationName: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Receiving location (transfers)' })
+  @Expose()
+  toLocationName: string | null;
+
   @ApiPropertyOptional({ description: 'Denormalised ingredient name for display' })
   @Expose()
   ingredientName: string | null;

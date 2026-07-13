@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { promises as dns } from 'dns';
@@ -13,6 +14,7 @@ export class DomainsService {
     @InjectRepository(DomainEntity)
     private readonly repo: Repository<DomainEntity>,
     private readonly dataSource: DataSource,
+    private readonly config: ConfigService,
   ) {}
 
   async list(businessId: string): Promise<DomainResponseDto[]> {
@@ -40,6 +42,8 @@ export class DomainsService {
         await repo.update({ businessId, isPrimary: true }, { isPrimary: false });
       }
       const verificationToken = `mrjollof-verify-${randomBytes(16).toString('hex')}`;
+      const cnameTarget =
+        this.config.get<string>('domains.cnameTarget') ?? 'app.mrjollof.com';
       const domain = repo.create({
         ...dto,
         businessId,
@@ -53,7 +57,7 @@ export class DomainsService {
           {
             type: 'CNAME',
             name: dto.hostname,
-            value: 'app.mrjollof.com',
+            value: cnameTarget,
           },
         ],
       });

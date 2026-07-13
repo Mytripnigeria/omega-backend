@@ -116,6 +116,22 @@ export class WorkstationSettingsResponseDto {
   @Expose()
   autoSyncMinutes: number;
 
+  @ApiProperty({ example: false })
+  @Expose()
+  geofenceEnabled: boolean;
+
+  @ApiPropertyOptional({ nullable: true, example: 6.5244 })
+  @Expose()
+  geofenceLatitude: number | null;
+
+  @ApiPropertyOptional({ nullable: true, example: 3.3792 })
+  @Expose()
+  geofenceLongitude: number | null;
+
+  @ApiProperty({ example: 100 })
+  @Expose()
+  geofenceRadiusMeters: number;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)
@@ -127,8 +143,17 @@ export class WorkstationSettingsResponseDto {
   updatedAt: Date;
 
   static from(entity: WorkstationSettingsEntity): WorkstationSettingsResponseDto {
-    return plainToInstance(WorkstationSettingsResponseDto, entity, {
-      excludeExtraneousValues: true,
-    });
+    return plainToInstance(
+      WorkstationSettingsResponseDto,
+      {
+        ...entity,
+        // Decimal columns come back as strings from pg — coerce for the client.
+        geofenceLatitude:
+          entity.geofenceLatitude == null ? null : Number(entity.geofenceLatitude),
+        geofenceLongitude:
+          entity.geofenceLongitude == null ? null : Number(entity.geofenceLongitude),
+      },
+      { excludeExtraneousValues: true },
+    );
   }
 }

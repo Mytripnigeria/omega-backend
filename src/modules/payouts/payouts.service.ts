@@ -29,6 +29,7 @@ import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.servic
 import { PaystackService } from '../paystack/paystack.service';
 import { IntegrationsService } from '../integrations/integrations.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
 
 export const PAYOUTS_QUEUE = 'payouts';
 
@@ -54,6 +55,7 @@ export class PayoutsService {
     private readonly paystack: PaystackService,
     private readonly integrations: IntegrationsService,
     private readonly activityLog: ActivityLogService,
+    private readonly ledger: FinancialTransactionsService,
   ) {}
 
   /**
@@ -451,6 +453,21 @@ export class PayoutsService {
         Number(payout.amount),
         payout.id,
         `Payout ${payout.reference} settled`,
+        mgr,
+      );
+      // Mirror into the financial-transactions ledger so the settled payout
+      // shows on the merchant Transactions page ("Payout" purpose filter).
+      await this.ledger.record(
+        {
+          businessId: payout.businessId,
+          type: 'debit',
+          purpose: 'payout',
+          amount: Number(payout.amount),
+          method: 'transfer',
+          currency: payout.currency ?? 'NGN',
+          reference: payout.reference,
+          description: `Payout ${payout.reference} settled`,
+        },
         mgr,
       );
     });

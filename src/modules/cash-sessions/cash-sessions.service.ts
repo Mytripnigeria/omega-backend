@@ -82,6 +82,7 @@ export class CashSessionsService {
       staffName,
       counterName: dto.counterName ?? null,
       staffsJoined: [staffName],
+      staffIdsJoined: [actor.sub],
       shiftId: dto.shiftId ?? null,
       status: 'open',
       openedAt: new Date(),
@@ -110,11 +111,88 @@ export class CashSessionsService {
 
   async myActive(actor: ActorContext): Promise<CashSessionResponseDto | null> {
     if (actor.sub_type !== 'staff') return null;
-    const session = await this.repo.findOne({
+    // The staff's own open session takes precedence.
+    let session = await this.repo.findOne({
       where: { staffId: actor.sub, status: 'open' },
       order: { openedAt: 'DESC' },
     });
+    // Otherwise, surface an open register on their store that they've joined,
+    // so a cashier who joined a colleague's register can use the POS.
+    if (!session && actor.storeId) {
+      const open = await this.repo.find({
+        where: { storeId: actor.storeId, status: 'open' },
+        order: { openedAt: 'DESC' },
+      });
+      session =
+        open.find((s) => (s.staffIdsJoined ?? []).includes(actor.sub)) ?? null;
+    }
     return session ? CashSessionResponseDto.from(session) : null;
+  }
+
+  /**
+   * Open registers on the staff's store that they can join. Excludes any
+   * register they already belong to (opener or already-joined).
+   */
+  async storeActive(actor: ActorContext): Promise<CashSessionResponseDto[]> {
+    if (actor.sub_type !== 'staff' || !actor.storeId) return [];
+    const open = await this.repo.find({
+      where: { storeId: actor.storeId, status: 'open' },
+      order: { openedAt: 'DESC' },
+    });
+    const joinable = open.filter(
+      (s) =>
+        s.staffId !== actor.sub &&
+        !(s.staffIdsJoined ?? []).includes(actor.sub),
+    );
+    return joinable.map((s) => CashSessionResponseDto.from(s));
+  }
+
+  /**
+   * Join an open register on the staff's own store. Adds the staff to the
+   * register's membership so they can transact on it and so `myActive`
+   * resolves it for them.
+   */
+  async join(
+    actor: ActorContext,
+    id: string,
+  ): Promise<CashSessionResponseDto> {
+    if (actor.sub_type !== 'staff' || !actor.storeId) {
+      throw new ForbiddenException('Only staff can join a register');
+    }
+    const session = await this.findEntity(actor, id);
+    if (session.status !== 'open') {
+      throw new BadRequestException('This register is no longer open');
+    }
+    if (session.storeId !== actor.storeId) {
+      throw new ForbiddenException('That register belongs to another store');
+    }
+
+    const staff = await this.staffRepo.findOne({ where: { id: actor.sub } });
+    const staffName = staff
+      ? `${staff.firstName} ${staff.lastName}`.trim()
+      : actor.actorName ?? 'Staff';
+
+    const idsJoined = new Set(session.staffIdsJoined ?? []);
+    idsJoined.add(actor.sub);
+    session.staffIdsJoined = Array.from(idsJoined);
+    if (!(session.staffsJoined ?? []).includes(staffName)) {
+      session.staffsJoined = [...(session.staffsJoined ?? []), staffName];
+    }
+    const saved = await this.repo.save(session);
+
+    this.activityLog.record({
+      actorType: 'staff',
+      actorId: actor.sub,
+      actorName: staffName,
+      action: 'cash_session.joined',
+      businessId: actor.businessId,
+      storeId: actor.storeId,
+      resourceType: 'cash_session',
+      resourceId: saved.id,
+      metadata: { counterName: saved.counterName },
+    });
+
+    return CashSessionResponseDto.from(saved);
   }
 
   /** Look up an open session for staff/store — used by ShiftsService.clockOut to gate. */
@@ -145,12 +223,18 @@ export class CashSessionsService {
     // ---------- Compute expected from the order ledger ----------
     const closedAt = new Date();
 
+    // Sales rung up by the opener AND any staff who joined the register all
+    // count toward this register's expected totals.
+    const sessionStaffIds = Array.from(
+      new Set([session.staffId, ...(session.staffIdsJoined ?? [])]),
+    );
+
     const cashRow = await this.orderRepo
       .createQueryBuilder('o')
       .select('COALESCE(SUM(o.paidAmount), 0)', 'total')
       .where('o.businessId = :businessId', { businessId: session.businessId })
       .andWhere('o.storeId = :storeId', { storeId: session.storeId })
-      .andWhere('o.staffId = :staffId', { staffId: session.staffId })
+      .andWhere('o.staffId IN (:...staffIds)', { staffIds: sessionStaffIds })
       .andWhere('o.paymentChannel = :ch', { ch: 'cash' })
       .andWhere('o.paidAt >= :openedAt', { openedAt: session.openedAt })
       .andWhere('o.paidAt <= :closedAt', { closedAt })
@@ -161,7 +245,7 @@ export class CashSessionsService {
       .select('COALESCE(SUM(o.paidAmount), 0)', 'total')
       .where('o.businessId = :businessId', { businessId: session.businessId })
       .andWhere('o.storeId = :storeId', { storeId: session.storeId })
-      .andWhere('o.staffId = :staffId', { staffId: session.staffId })
+      .andWhere('o.staffId IN (:...staffIds)', { staffIds: sessionStaffIds })
       .andWhere('o.paymentChannel IN (:...chs)', { chs: ['card', 'paystack'] })
       .andWhere('o.paidAt >= :openedAt', { openedAt: session.openedAt })
       .andWhere('o.paidAt <= :closedAt', { closedAt })
@@ -172,7 +256,7 @@ export class CashSessionsService {
       .select('COALESCE(SUM(o.paidAmount), 0)', 'total')
       .where('o.businessId = :businessId', { businessId: session.businessId })
       .andWhere('o.storeId = :storeId', { storeId: session.storeId })
-      .andWhere('o.staffId = :staffId', { staffId: session.staffId })
+      .andWhere('o.staffId IN (:...staffIds)', { staffIds: sessionStaffIds })
       .andWhere('o.paymentChannel IN (:...chs)', { chs: ['wallet', 'points'] })
       .andWhere('o.paidAt >= :openedAt', { openedAt: session.openedAt })
       .andWhere('o.paidAt <= :closedAt', { closedAt })
@@ -352,6 +436,12 @@ export class CashSessionsService {
     const storeName = store?.name ?? 'Store';
     const until = session.closedAt ?? new Date();
 
+    // Include sales from every staff member who joined the register, not
+    // just the opener — mirrors the expected-totals computation in close().
+    const sessionStaffIds = Array.from(
+      new Set([session.staffId, ...(session.staffIdsJoined ?? [])]),
+    );
+
     const agg = (channels: string[]) =>
       this.orderRepo
         .createQueryBuilder('o')
@@ -359,7 +449,7 @@ export class CashSessionsService {
         .addSelect('COUNT(*)', 'count')
         .where('o.businessId = :businessId', { businessId: session.businessId })
         .andWhere('o.storeId = :storeId', { storeId: session.storeId })
-        .andWhere('o.staffId = :staffId', { staffId: session.staffId })
+        .andWhere('o.staffId IN (:...staffIds)', { staffIds: sessionStaffIds })
         .andWhere('o.paymentChannel IN (:...chs)', { chs: channels })
         .andWhere('o.paidAt >= :from', { from: session.openedAt })
         .andWhere('o.paidAt <= :to', { to: until })

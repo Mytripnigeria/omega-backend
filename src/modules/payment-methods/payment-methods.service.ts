@@ -24,6 +24,27 @@ export class PaymentMethodsService {
     return PaymentMethodResponseDto.fromMany(items);
   }
 
+  /**
+   * Enabled payment methods visible on a given workstation channel (`pos` /
+   * `self`). Used by the workstation Counter POS and Self-Service screens so
+   * the rendered payment options come from the merchant's settings rather than
+   * a hardcoded Cash/Card pair. An empty `visibility` list means "all channels"
+   * (backwards compatible with methods created before the channel field).
+   */
+  async listEnabledForChannel(
+    businessId: string,
+    channel: 'pos' | 'self' | 'storefront' | 'omni',
+  ): Promise<PaymentMethodResponseDto[]> {
+    const items = await this.repo.find({
+      where: { businessId, isEnabled: true },
+      order: { order: 'ASC', createdAt: 'ASC' },
+    });
+    const visible = items.filter(
+      (m) => !m.visibility?.length || m.visibility.includes(channel),
+    );
+    return PaymentMethodResponseDto.fromMany(visible);
+  }
+
   async findOne(businessId: string, id: string): Promise<PaymentMethodResponseDto> {
     return PaymentMethodResponseDto.from(await this.findEntity(businessId, id));
   }

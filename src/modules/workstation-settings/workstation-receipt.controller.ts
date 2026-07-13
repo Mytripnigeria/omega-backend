@@ -30,3 +30,22 @@ export class WorkstationReceiptController {
     return this.service.getReceiptInfo(businessId, storeId);
   }
 }
+
+/**
+ * Staff-accessible per-function role restrictions (configured on the merchant
+ * dashboard's Workstation Settings). The workstation app reads this to decide
+ * which pages the signed-in staff role may open.
+ */
+@ApiTags('workstation-settings')
+@ApiBearerAuth()
+@UseGuards(JwtOrStaffGuard)
+@Controller('workstation/function-access')
+export class WorkstationFunctionAccessController {
+  constructor(private readonly service: WorkstationSettingsService) {}
+
+  @ApiOperation({ summary: 'Per-function role access map for the workstation' })
+  @Get()
+  get(@Req() req: AuthedRequest) {
+    return this.service.getFunctionAccess(req.user!.businessId);
+  }
+}

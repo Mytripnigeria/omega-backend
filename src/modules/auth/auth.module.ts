@@ -16,6 +16,7 @@ import { CustomersModule } from '../customers/customers.module';
 import { ReferralsModule } from '../referrals/referrals.module';
 import { UsersModule } from '../users/users.module';
 import { PhoneOtpEntity } from './entities/phone-otp.entity';
+import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
 import { SmsService } from './sms/sms.service';
 import { SMS_ADAPTER } from './sms/sms-adapter.interface';
 import { ConsoleSmsAdapter } from './sms/console.adapter';
@@ -25,7 +26,7 @@ import { TermiiSmsAdapter } from './sms/termii.adapter';
   imports: [
     PassportModule,
     JwtModule.register({}),
-    TypeOrmModule.forFeature([PhoneOtpEntity]),
+    TypeOrmModule.forFeature([PhoneOtpEntity, WorkstationSettingsEntity]),
     AdminModule,
     StaffModule,
     ActivityLogModule,

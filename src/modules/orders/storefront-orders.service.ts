@@ -790,27 +790,22 @@ export class StorefrontOrdersService {
     const products = productIds.length
       ? await this.productRepo.find({
           where: productIds.map((id) => ({ id })),
+          relations: ['addonGroups', 'addonGroups.addons'],
         })
       : [];
     const combos = comboIds.length
       ? await this.comboRepo.find({ where: comboIds.map((id) => ({ id })) })
       : [];
-    const variationIds = Array.from(
-      new Set(
-        items
-          .map((i) => i.variationId)
-          .filter((v): v is string => !!v),
-      ),
-    );
-    const variations = variationIds.length
+    // Load every variation of the ordered products so lines can be matched by
+    // variationId or (legacy payloads) by snapshot name.
+    const variations = productIds.length
       ? await this.variationRepo.find({
-          where: variationIds.map((id) => ({ id })),
+          where: productIds.map((id) => ({ productId: id })),
         })
       : [];
 
     const productById = new Map(products.map((p) => [p.id, p]));
     const comboById = new Map(combos.map((c) => [c.id, c]));
-    const variationById = new Map(variations.map((v) => [v.id, v]));
 
     const out: ResolvedLine[] = [];
     for (const i of items) {
@@ -833,15 +828,58 @@ export class StorefrontOrdersService {
         let unitPrice = Number(p.sellingPrice ?? p.price ?? 0);
         let stock = p.stock ?? 0;
         let displayName = p.name;
+        const productVariations = variations.filter(
+          (v) => v.productId === p.id,
+        );
+        let chosenVariation = undefined as
+          | (typeof productVariations)[number]
+          | undefined;
         if (i.variationId) {
-          const v = variationById.get(i.variationId);
-          if (!v || v.productId !== p.id)
+          chosenVariation = productVariations.find(
+            (v) => v.id === i.variationId,
+          );
+          if (!chosenVariation)
             throw new BadRequestException(
               `Selected variation is not valid for "${p.name}"`,
             );
-          unitPrice = Number(v.sellingPrice ?? v.price ?? unitPrice);
-          stock = v.stock ?? stock;
-          displayName = `${p.name} (${v.name})`;
+        } else if (typeof i.variation?.name === 'string') {
+          // Legacy payloads carry only the snapshot name — best-effort match
+          // so the variation price still replaces the base price.
+          chosenVariation = productVariations.find(
+            (v) => v.name === i.variation!.name,
+          );
+        }
+        if (chosenVariation) {
+          unitPrice = Number(
+            chosenVariation.sellingPrice ?? chosenVariation.price ?? unitPrice,
+          );
+          stock = chosenVariation.stock ?? stock;
+          displayName = `${p.name} (${chosenVariation.name})`;
+        }
+        // Add-ons are priced server-side from the product's addon groups so
+        // the persisted total (and the Paystack charge) can't be tampered
+        // with — the client snapshot only supplies which add-ons were chosen.
+        let addonsSnapshot = i.addons ?? null;
+        if (i.addons?.length) {
+          const productAddons = (p.addonGroups ?? []).flatMap(
+            (g) => g.addons ?? [],
+          );
+          addonsSnapshot = i.addons.map((raw) => {
+            const rawId = typeof raw.id === 'string' ? raw.id : undefined;
+            const rawName =
+              typeof raw.name === 'string' ? raw.name : undefined;
+            const match =
+              (rawId && productAddons.find((a) => a.id === rawId)) ||
+              (rawName && productAddons.find((a) => a.name === rawName)) ||
+              undefined;
+            if (!match)
+              throw new BadRequestException(
+                `Add-on "${rawName ?? rawId ?? 'unknown'}" is not valid for "${p.name}"`,
+              );
+            const addonPrice = Number(match.price ?? 0);
+            unitPrice += addonPrice;
+            return { ...raw, id: match.id, name: match.name, price: addonPrice };
+          });
         }
         if (stock === 0)
           throw new BadRequestException(
@@ -858,10 +896,10 @@ export class StorefrontOrdersService {
           quantity: i.quantity,
           unitPrice,
           lineTotal: unitPrice * i.quantity,
-          variation: i.variation ?? (i.variationId
-            ? { id: i.variationId, name: variationById.get(i.variationId)?.name ?? null }
-            : null),
-          addons: i.addons ?? null,
+          variation: chosenVariation
+            ? { ...(i.variation ?? {}), id: chosenVariation.id, name: chosenVariation.name }
+            : i.variation ?? null,
+          addons: addonsSnapshot,
           notes: i.notes,
           categoryId: p.categoryId ?? null,
         });

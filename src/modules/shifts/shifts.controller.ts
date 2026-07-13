@@ -37,6 +37,7 @@ import { UpdateShiftDto } from './dto/update-shift.dto';
 import { ShiftFilterDto } from './dto/shift-filter.dto';
 import { ShiftResponseDto } from './dto/shift-response.dto';
 import { CreateBreakDto } from './dto/break-dto';
+import { ClockInDto } from './dto/clock-in.dto';
 
 @ApiTags('shifts')
 @Controller('shifts')
@@ -114,8 +115,12 @@ export class ShiftsController {
   @ApiBearerAuth()
   @UseGuards(StaffJwtGuard)
   @Post(':id/clock-in')
-  clockIn(@Param('id') id: string, @CurrentStaff() staff: StaffJwtPayload) {
-    return this.shiftsService.clockIn(id, staff);
+  clockIn(
+    @Param('id') id: string,
+    @CurrentStaff() staff: StaffJwtPayload,
+    @Body() dto: ClockInDto,
+  ) {
+    return this.shiftsService.clockIn(id, staff, dto);
   }
 
   @ApiOperation({

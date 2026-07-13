@@ -226,6 +226,40 @@ export class OrderResponseDto {
   @Type(() => Date)
   updatedAt: Date;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 20,
+    description: 'Estimated prep minutes = the longest item prep time.',
+  })
+  @Expose()
+  estimatedPrepMinutes: number | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description: 'When the order entered PREPARING (kitchen countdown anchor).',
+  })
+  @Expose()
+  @Type(() => Date)
+  preparingStartedAt: Date | null;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description: 'Staff member who moved the order into PREPARING.',
+  })
+  @Expose()
+  preparingStaffId: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Jenifer Okpe',
+    description: 'Display name of whoever moved the order into PREPARING.',
+  })
+  @Expose()
+  preparingStaffName: string | null;
+
   static from(entity: OrderEntity): OrderResponseDto {
     return plainToInstance(
       OrderResponseDto,

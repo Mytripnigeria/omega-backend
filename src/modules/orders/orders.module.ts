@@ -36,6 +36,7 @@ import { IngredientEntity } from '../ingredients/entities/ingredient.entity';
 import { IngredientMovementEntity } from '../ingredients/entities/ingredient-movement.entity';
 import { IngredientLocationStockEntity } from '../ingredients/entities/ingredient-location-stock.entity';
 import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
+import { DeliveryEntity } from '../deliveries/entities/delivery.entity';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { WorkstationSettingsEntity } from '../workstation-settings/entities/work
       OrderEntity,
       OrderItemEntity,
       OrderStatusEventEntity,
+      DeliveryEntity,
       WorkstationSettingsEntity,
       StoreEntity,
       CustomerAddressEntity,

@@ -153,6 +153,39 @@ export class WorkstationSettingsEntity {
   @Column({ type: 'int', default: 5 })
   autoSyncMinutes: number;
 
+  // --- Geofencing: restrict staff login / clock-in to the work environment ---
+  @ApiProperty({
+    example: false,
+    default: false,
+    description: 'When on, staff can only log in / clock in within the geofence.',
+  })
+  @Column({ default: false })
+  geofenceEnabled: boolean;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 6.5244,
+    description: 'Geofence centre latitude.',
+  })
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  geofenceLatitude: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 3.3792,
+    description: 'Geofence centre longitude.',
+  })
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  geofenceLongitude: number | null;
+
+  @ApiProperty({
+    example: 100,
+    default: 100,
+    description: 'Geofence radius in metres.',
+  })
+  @Column({ type: 'int', default: 100 })
+  geofenceRadiusMeters: number;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn()
   createdAt: Date;

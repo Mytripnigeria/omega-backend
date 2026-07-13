@@ -48,6 +48,17 @@ export class WorkstationSettingsService {
     );
   }
 
+  /**
+   * Staff-readable slice of the settings: which workstation functions are
+   * restricted to which roles. The workstation app gates its pages on this.
+   */
+  async getFunctionAccess(
+    businessId: string,
+  ): Promise<{ functionRoleAccess: Record<string, string[]> | null }> {
+    const settings = await this.repo.findOne({ where: { businessId } });
+    return { functionRoleAccess: settings?.functionRoleAccess ?? null };
+  }
+
   private async getEntity(businessId: string): Promise<WorkstationSettingsEntity> {
     let settings = await this.repo.findOne({ where: { businessId } });
     if (!settings) {
