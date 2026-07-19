@@ -18,6 +18,7 @@ import {
 import { DeliveryResponseDto } from './dto/delivery-response.dto';
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { OrdersService } from '../orders/orders.service';
 
 interface ActorContext {
   sub: string;
@@ -28,6 +29,12 @@ interface ActorContext {
 }
 
 const VALID_TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
+  // The waiter's "Send for delivery" dispatches an awaiting delivery onto the
+  // rider board (-> PENDING).
+  [DeliveryStatus.AWAITING_DISPATCH]: [
+    DeliveryStatus.PENDING,
+    DeliveryStatus.FAILED,
+  ],
   [DeliveryStatus.PENDING]: [DeliveryStatus.ASSIGNED, DeliveryStatus.FAILED],
   [DeliveryStatus.ASSIGNED]: [DeliveryStatus.IN_TRANSIT, DeliveryStatus.FAILED],
   [DeliveryStatus.IN_TRANSIT]: [DeliveryStatus.DELIVERED, DeliveryStatus.FAILED],
@@ -45,6 +52,7 @@ export class DeliveriesService {
     @InjectRepository(StaffEntity)
     private readonly staffRepo: Repository<StaffEntity>,
     private readonly activityLog: ActivityLogService,
+    private readonly ordersService: OrdersService,
   ) {}
 
   async create(actor: ActorContext, dto: CreateDeliveryDto): Promise<DeliveryResponseDto> {
@@ -103,6 +111,7 @@ export class DeliveriesService {
     const qb = this.repo
       .createQueryBuilder('d')
       .leftJoinAndSelect('d.order', 'order')
+      .leftJoinAndSelect('order.items', 'orderItems')
       .where('d.businessId = :businessId', { businessId: actor.businessId })
       .orderBy('d.createdAt', 'DESC')
       .skip((page - 1) * limit)
@@ -143,7 +152,7 @@ export class DeliveriesService {
   private async findEntity(actor: ActorContext, id: string): Promise<DeliveryEntity> {
     const delivery = await this.repo.findOne({
       where: { id },
-      relations: ['order'],
+      relations: ['order', 'order.items'],
     });
     if (!delivery) throw new NotFoundException(`Delivery ${id} not found`);
     if (delivery.businessId !== actor.businessId) {
@@ -163,6 +172,36 @@ export class DeliveriesService {
     if (!VALID_TRANSITIONS[from].includes(to)) {
       throw new BadRequestException(`Cannot transition delivery from ${from} to ${to}`);
     }
+  }
+
+  /**
+   * Waiter hand-off: "Send for delivery" moves an awaiting delivery onto the
+   * rider board (AWAITING_DISPATCH -> PENDING). Riders only ever see PENDING
+   * onwards, so nothing is offered for acceptance before the waiter sends it.
+   */
+  async dispatch(actor: ActorContext, id: string): Promise<DeliveryResponseDto> {
+    const delivery = await this.findEntity(actor, id);
+    this.assertTransition(delivery.status, DeliveryStatus.PENDING);
+
+    delivery.status = DeliveryStatus.PENDING;
+    delivery.dispatchedAt = new Date();
+    delivery.dispatchedByStaffId = actor.sub_type === 'staff' ? actor.sub : null;
+    delivery.dispatchedByName = actor.actorName ?? null;
+    await this.repo.save(delivery);
+
+    this.activityLog.record({
+      actorType: actor.sub_type,
+      actorId: actor.sub,
+      actorName: actor.actorName ?? 'Unknown',
+      action: 'delivery.dispatched',
+      businessId: actor.businessId,
+      storeId: delivery.storeId,
+      resourceType: 'delivery',
+      resourceId: delivery.id,
+      metadata: { orderId: delivery.orderId },
+    });
+
+    return this.findOne(actor, delivery.id);
   }
 
   async assign(
@@ -210,7 +249,9 @@ export class DeliveriesService {
     delivery.pickedUpAt = new Date();
     await this.repo.save(delivery);
 
-    // The order is now out for delivery.
+    // The order is now out for delivery. Routed through OrdersService so the
+    // status event, customer push and any pending side-effects all fire (the
+    // rider gate passes — riderStaffId was set at accept).
     const pickedOrder = await this.orderRepo.findOne({
       where: { id: delivery.orderId },
     });
@@ -219,8 +260,16 @@ export class DeliveriesService {
       (pickedOrder.status === OrderStatus.READY ||
         pickedOrder.status === OrderStatus.PREPARING)
     ) {
-      pickedOrder.status = OrderStatus.DELIVERING;
-      await this.orderRepo.save(pickedOrder);
+      // PREPARING can't transition straight to DELIVERING — step through
+      // READY first for late pickups on orders still marked as in prep.
+      if (pickedOrder.status === OrderStatus.PREPARING) {
+        await this.ordersService.updateStatus(actor, pickedOrder.id, {
+          status: OrderStatus.READY,
+        });
+      }
+      await this.ordersService.updateStatus(actor, pickedOrder.id, {
+        status: OrderStatus.DELIVERING,
+      });
     }
 
     this.activityLog.record({
@@ -248,14 +297,32 @@ export class DeliveriesService {
     await this.repo.save(delivery);
 
     // Completing the delivery completes the order (delivering -> completed).
+    // Routed through OrdersService so cash-on-delivery settles onto the
+    // ledger, ingredients deduct if they somehow haven't, and the status
+    // event + customer push fire.
     const order = await this.orderRepo.findOne({ where: { id: delivery.orderId } });
     if (
       order &&
       order.status !== OrderStatus.COMPLETED &&
       order.status !== OrderStatus.CANCELLED
     ) {
-      order.status = OrderStatus.COMPLETED;
-      await this.orderRepo.save(order);
+      // Step any earlier status up to DELIVERING first so the transition
+      // matrix is honoured (e.g. a deliver recorded before pickup synced).
+      if (order.status === OrderStatus.PREPARING) {
+        await this.ordersService.updateStatus(actor, order.id, {
+          status: OrderStatus.READY,
+        });
+        order.status = OrderStatus.READY;
+      }
+      if (order.status === OrderStatus.READY) {
+        await this.ordersService.updateStatus(actor, order.id, {
+          status: OrderStatus.DELIVERING,
+        });
+        order.status = OrderStatus.DELIVERING;
+      }
+      await this.ordersService.updateStatus(actor, order.id, {
+        status: OrderStatus.COMPLETED,
+      });
     }
 
     this.activityLog.record({

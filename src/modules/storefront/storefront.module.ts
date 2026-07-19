@@ -6,6 +6,7 @@ import { StorefrontBannerEntity } from './entities/storefront-banner.entity';
 import { StorefrontThemePresetEntity } from './entities/storefront-theme-preset.entity';
 import { StorefrontPageViewEntity } from './entities/storefront-page-view.entity';
 import { PaymentMethodEntity } from '../payment-methods/entities/payment-method.entity';
+import { DomainEntity } from '../domains/entities/domain.entity';
 import { StorefrontService } from './storefront.service';
 import { StorefrontController } from './storefront.controller';
 import { PublicStorefrontController } from './public-storefront.controller';
@@ -22,6 +23,7 @@ import { LoyaltyModule } from '../loyalty/loyalty.module';
       StorefrontThemePresetEntity,
       StorefrontPageViewEntity,
       PaymentMethodEntity,
+      DomainEntity,
     ]),
     ActivityLogModule,
     BusinessModule,

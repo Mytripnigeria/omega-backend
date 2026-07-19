@@ -145,6 +145,19 @@ export class OrderEntity {
   @Column({ type: 'varchar', nullable: true })
   preparingStaffName: string | null;
 
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description:
+      'When recipe ingredients were deducted from inventory for this order. ' +
+      'Deduction happens once, at first acceptance — this flag prevents ' +
+      'double-deduction on completion/payment and drives stock restoration ' +
+      'if the order is cancelled.',
+  })
+  @Column({ type: 'timestamptz', nullable: true })
+  ingredientsConsumedAt: Date | null;
+
   @ApiProperty({ example: 4500 })
   @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
   subtotal: number;

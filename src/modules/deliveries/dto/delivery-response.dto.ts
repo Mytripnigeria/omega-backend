@@ -47,6 +47,20 @@ export class DeliveryResponseDto {
   @Expose()
   status: DeliveryStatus;
 
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description: 'When the waiter sent the order out to the delivery board.',
+  })
+  @Expose()
+  @Type(() => Date)
+  dispatchedAt: Date | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
+  dispatchedByName: string | null;
+
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
   @Expose()
   @Type(() => Date)
@@ -78,6 +92,52 @@ export class DeliveryResponseDto {
   @Expose()
   customerName: string | null;
 
+  @ApiPropertyOptional({
+    description:
+      'Denormalised order line items so the delivery board can show the full order.',
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        quantity: { type: 'number' },
+        unitPrice: { type: 'number' },
+        variation: { type: 'object', nullable: true },
+        addons: { type: 'array', nullable: true },
+        notes: { type: 'string', nullable: true },
+      },
+    },
+  })
+  @Expose()
+  items: Array<{
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    variation: unknown | null;
+    addons: unknown[] | null;
+    notes: string | null;
+  }>;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Denormalised order total' })
+  @Expose()
+  orderTotal: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
+  orderStatus: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
+  orderNotes: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
+  paymentChannel: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
+  paymentStatus: string | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)
@@ -97,6 +157,20 @@ export class DeliveryResponseDto {
         longitude: entity.longitude == null ? null : Number(entity.longitude),
         orderNumber: entity.order?.orderNumber ?? null,
         customerName: entity.order?.customerName ?? null,
+        items: (entity.order?.items ?? []).map((i) => ({
+          name: i.name,
+          quantity: Number(i.quantity),
+          unitPrice: Number(i.unitPrice),
+          variation: i.variation ?? null,
+          addons: i.addons ?? null,
+          notes: i.notes ?? null,
+        })),
+        orderTotal:
+          entity.order?.total == null ? null : Number(entity.order.total),
+        orderStatus: entity.order?.status ?? null,
+        orderNotes: entity.order?.notes ?? null,
+        paymentChannel: entity.order?.paymentChannel ?? null,
+        paymentStatus: entity.order?.paymentStatus ?? null,
       },
       { excludeExtraneousValues: true },
     );

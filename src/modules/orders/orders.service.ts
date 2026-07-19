@@ -137,17 +137,22 @@ export class OrdersService {
   /**
    * Deducts each order item's recipe ingredients from inventory and records
    * a CONSUMPTION movement per ingredient, so the merchant hub history view
-   * shows what each completed order consumed. Idempotent in practice — we
-   * only call this on the transition into COMPLETED, and the status state
-   * machine forbids re-entering COMPLETED. If an ingredient has per-location
-   * stock rows, we debit the location holding the most stock (best effort:
-   * orders don't carry a location context).
+   * shows what each completed order consumed. Deduction happens at the first
+   * acceptance of the order (client spec: "deductions are instantly made" when
+   * an order is taken on), with completion/payment as the fallback trigger for
+   * orders that skipped acceptance — the ingredientsConsumedAt flag makes the
+   * whole thing idempotent. If an ingredient has per-location stock rows, we
+   * debit the location holding the most stock (best effort: orders don't
+   * carry a location context). Callers must save the order in the same tx so
+   * the flag persists.
    */
   private async consumeIngredientsForOrder(
     m: import('typeorm').EntityManager,
     order: OrderEntity,
     actor: ActorContext,
   ): Promise<void> {
+    if (order.ingredientsConsumedAt) return;
+    order.ingredientsConsumedAt = new Date();
     const items = await m.getRepository(OrderItemEntity).find({
       where: { orderId: order.id },
     });
@@ -240,6 +245,133 @@ export class OrdersService {
         }),
       );
     }
+  }
+
+  /**
+   * Inverse of consumeIngredientsForOrder — restores recipe stock when an
+   * order that already consumed ingredients is cancelled. Re-credits the
+   * location each CONSUMPTION movement debited (matched by name; falls back to
+   * the most-stocked row) and records a CORRECTION movement per ingredient so
+   * the audit trail shows the reversal. Clears ingredientsConsumedAt; callers
+   * must save the order in the same tx.
+   */
+  private async restoreIngredientsForOrder(
+    m: import('typeorm').EntityManager,
+    order: OrderEntity,
+    actor: ActorContext,
+  ): Promise<void> {
+    if (!order.ingredientsConsumedAt) return;
+
+    const ingredientRepo = m.getRepository(IngredientEntity);
+    const movementRepo = m.getRepository(IngredientMovementEntity);
+    const locationStockRepo = m.getRepository(IngredientLocationStockEntity);
+
+    const consumptions = await movementRepo.find({
+      where: {
+        referenceType: 'order',
+        referenceId: order.id,
+        type: MovementType.CONSUMPTION,
+      },
+    });
+
+    for (const mv of consumptions) {
+      // Consumption quantities are stored negative; the restore is positive.
+      const qty = -Number(mv.quantity);
+      if (qty <= 0) continue;
+
+      const ing = await ingredientRepo.findOne({
+        where: { id: mv.ingredientId },
+      });
+      if (!ing) continue;
+
+      const previousStock = Number(ing.currentStock);
+      const newStock = previousStock + qty;
+
+      const locationRows = await locationStockRepo.find({
+        where: { ingredientId: mv.ingredientId },
+        relations: ['location'],
+      });
+      if (locationRows.length > 0) {
+        let target = locationRows.find(
+          (r) => r.location?.name === mv.fromLocationName,
+        );
+        if (!target) {
+          locationRows.sort(
+            (a, b) => Number(b.currentStock) - Number(a.currentStock),
+          );
+          target = locationRows[0];
+        }
+        target.currentStock = Number(target.currentStock) + qty;
+        await locationStockRepo.save(target);
+      }
+
+      ing.currentStock = newStock;
+      await ingredientRepo.save(ing);
+
+      await movementRepo.save(
+        movementRepo.create({
+          ingredientId: mv.ingredientId,
+          storeId: ing.storeId,
+          staffId: actor.sub_type === 'staff' ? actor.sub : null,
+          staffName: actor.actorName ?? null,
+          type: MovementType.CORRECTION,
+          quantity: qty,
+          previousStock,
+          newStock,
+          fromLocationName: mv.fromLocationName,
+          reason: `Reversal — order #${order.orderNumber} cancelled`,
+          referenceType: 'order',
+          referenceId: order.id,
+        }),
+      );
+    }
+
+    order.ingredientsConsumedAt = null;
+  }
+
+  /**
+   * Settles the outstanding balance of a cash (or channel-less) order the
+   * moment staff completes it, so cash collected at hand-over always lands on
+   * the financial ledger with a paidAt inside the register window. Never
+   * touches orders holding an unpaid online intent (paystack/card/wallet/
+   * points) — those settle through their own flows. Callers must save the
+   * order in the same tx.
+   */
+  private async settleUnpaidCashOrder(
+    m: import('typeorm').EntityManager,
+    order: OrderEntity,
+    actor: ActorContext,
+  ): Promise<void> {
+    if (order.paymentStatus === 'paid') return;
+    if (order.paymentChannel && order.paymentChannel !== 'cash') return;
+
+    const amount = Number(order.total) - Number(order.paidAmount);
+    if (amount <= 0) return;
+
+    order.paidAmount = Number(order.total);
+    order.paymentChannel = 'cash';
+    order.paymentStatus = 'paid';
+    order.paidAt = new Date();
+
+    await this.ledger.record(
+      {
+        businessId: order.businessId,
+        storeId: order.storeId,
+        type: 'credit',
+        purpose: 'order_payment',
+        amount,
+        method: 'cash',
+        reference: null,
+        description: `Order #${order.orderNumber} payment (collected on completion)`,
+        linkedType: 'order',
+        linkedId: order.id,
+        customerId: order.customerId,
+        customerName: order.customerName,
+        staffId: actor.sub_type === 'staff' ? actor.sub : order.staffId,
+        staffName: actor.actorName ?? order.staffName ?? null,
+      },
+      m,
+    );
   }
 
   /**
@@ -405,8 +537,9 @@ export class OrdersService {
   }
 
   /**
-   * Auto-creates a PENDING delivery when a delivery order becomes READY, so it
-   * surfaces on the workstation Delivery "Available to accept" tab for a rider.
+   * Auto-creates a delivery record when a delivery order becomes READY. It is
+   * created AWAITING_DISPATCH — invisible to riders until the waiter presses
+   * "Send for delivery", which moves it to PENDING on the Delivery board.
    * No-op when a delivery already exists for the order (idempotent).
    */
   private async ensureDeliveryForOrder(
@@ -436,7 +569,7 @@ export class OrdersService {
         phone: order.customerPhone ?? null,
         latitude: num(addr.lat) ?? num(addr.latitude),
         longitude: num(addr.lng) ?? num(addr.longitude),
-        status: DeliveryStatus.PENDING,
+        status: DeliveryStatus.AWAITING_DISPATCH,
       }),
     );
   }
@@ -539,8 +672,16 @@ export class OrdersService {
         prev = to;
       }
 
+      // Orders accepted at create (cashier accept / quick bill / auto-accept)
+      // consume their recipe ingredients immediately — same "instant
+      // deduction" rule as acceptance via updateStatus.
+      if (initialStatus !== OrderStatus.INITIATED) {
+        await this.consumeIngredientsForOrder(manager, persisted, actor);
+        await manager.save(persisted);
+      }
+
       // Quick Bill can create a delivery order already at READY (skipping the
-      // kitchen) — make it available to riders immediately.
+      // kitchen) — create its delivery record (awaiting waiter dispatch).
       if (initialStatus === OrderStatus.READY && (dto.isDelivery ?? false)) {
         await this.ensureDeliveryForOrder(manager, persisted);
       }
@@ -690,8 +831,9 @@ export class OrdersService {
     }
 
     // DELIVERING is exclusive to delivery orders, and only once a rider has
-    // actually accepted the order (client spec: "Send for delivery" can only
-    // happen after a rider assigned themselves).
+    // actually accepted the order (the waiter's "Send for delivery" merely
+    // dispatches the delivery to the rider board; rider pickup is what moves
+    // the order to DELIVERING).
     if (dto.status === OrderStatus.DELIVERING) {
       if (!order.isDelivery) {
         throw new BadRequestException(
@@ -711,6 +853,19 @@ export class OrdersService {
     const fromStatus = order.status;
     order.status = dto.status;
 
+    // Attribute the sale to the staff member who accepts an unclaimed order
+    // (storefront/self-service orders arrive with no staffId). Drives "My
+    // Sales" and register close-out coverage.
+    if (
+      actor.sub_type === 'staff' &&
+      !order.staffId &&
+      fromStatus === OrderStatus.INITIATED &&
+      dto.status !== OrderStatus.CANCELLED
+    ) {
+      order.staffId = actor.sub;
+      order.staffName = actor.actorName ?? null;
+    }
+
     // Anchor the kitchen countdown to when prep actually begins, and record
     // who started preparing (shown on the kitchen card).
     if (dto.status === OrderStatus.PREPARING && !order.preparingStartedAt) {
@@ -720,6 +875,25 @@ export class OrdersService {
     }
 
     await this.dataSource.transaction(async (m) => {
+      // Deduct recipe ingredients the moment the order is taken on (first
+      // transition past INITIATED), with COMPLETED as the fallback for orders
+      // that skipped acceptance. consumeIngredientsForOrder is idempotent via
+      // ingredientsConsumedAt, and runs inside the tx so an ingredient
+      // failure rolls the status back.
+      if (
+        dto.status === OrderStatus.PENDING ||
+        dto.status === OrderStatus.PREPARING ||
+        dto.status === OrderStatus.READY ||
+        dto.status === OrderStatus.COMPLETED
+      ) {
+        await this.consumeIngredientsForOrder(m, order, actor);
+      }
+      // Cash handed over at completion (waiter serve / rider deliver) must
+      // land on the ledger with a paidAt — otherwise registers and the
+      // transactions page never see the sale.
+      if (dto.status === OrderStatus.COMPLETED) {
+        await this.settleUnpaidCashOrder(m, order, actor);
+      }
       await m.save(order);
       await m.save(
         m.create(OrderStatusEventEntity, {
@@ -730,15 +904,11 @@ export class OrdersService {
           actorType: actor.sub_type,
         }),
       );
-      // A delivery order that's READY becomes available for a rider to accept
-      // — make sure a delivery record exists so it shows on the Delivery board.
+      // A delivery order that's READY becomes available for the waiter to
+      // send out — make sure a delivery record exists (created awaiting
+      // dispatch; riders only see it after the waiter sends it).
       if (dto.status === OrderStatus.READY && order.isDelivery) {
         await this.ensureDeliveryForOrder(m, order);
-      }
-      // Auto-deduct recipe ingredients from inventory on completion. Runs
-      // inside the same tx so an ingredient failure rolls the status back.
-      if (dto.status === OrderStatus.COMPLETED) {
-        await this.consumeIngredientsForOrder(m, order, actor);
       }
     });
 
@@ -783,6 +953,10 @@ export class OrdersService {
       // Refund the customer's monetary artefacts inside the same tx as the
       // status change so a refund failure rolls back the cancellation.
       await this.refundOrderArtefacts(m, order, actor);
+
+      // Put consumed recipe ingredients back on the shelf — deduction now
+      // happens at acceptance, so a cancelled order must restore stock.
+      await this.restoreIngredientsForOrder(m, order, actor);
 
       // Mark the order as fully refunded after compensation if it was paid.
       if (wasPaid) {
@@ -1004,6 +1178,13 @@ export class OrdersService {
     if (amount <= 0) throw new BadRequestException('Payment amount must be positive');
 
     await this.dataSource.transaction(async (m) => {
+      // A cashier taking payment for an unclaimed order (storefront/self
+      // orders arrive with no staffId) claims the sale — mirrors the
+      // acceptance stamp in updateStatus.
+      if (actor.sub_type === 'staff' && !order.staffId) {
+        order.staffId = actor.sub;
+        order.staffName = actor.actorName ?? null;
+      }
       order.paidAmount = Number(order.paidAmount) + amount;
       if (dto.paymentMethodId) order.paymentMethodId = dto.paymentMethodId;
       if (dto.paymentChannel) order.paymentChannel = dto.paymentChannel;

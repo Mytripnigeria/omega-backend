@@ -119,6 +119,19 @@ export class DeliveriesController {
   }
 
   @ApiOperation({
+    summary: 'Send for delivery (waiter dispatch)',
+    description:
+      'Waiter-facing. Transitions awaiting_dispatch → pending, putting the ' +
+      'delivery on the rider board. Riders never see deliveries before this.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiOkResponse({ type: DeliveryResponseDto })
+  @Post(':id/dispatch')
+  dispatch(@Req() req: AuthedRequest, @Param('id') id: string) {
+    return this.service.dispatch(actorFrom(req), id);
+  }
+
+  @ApiOperation({
     summary: 'Assign delivery to a rider',
     description: 'Admin-only typical use. Transitions status pending → assigned.',
   })

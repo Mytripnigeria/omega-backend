@@ -123,6 +123,17 @@ export class ProductResponseDto {
   @Expose()
   categoryId: string | null;
 
+  @ApiPropertyOptional({
+    example: 'Rice',
+    nullable: true,
+    description:
+      'Denormalised category name (resolved even for soft-deleted categories) ' +
+      'so clients can match products to category lists when the id has gone ' +
+      'stale.',
+  })
+  @Expose()
+  categoryName: string | null;
+
   @ApiProperty({ example: 3500.0 })
   @Expose()
   price: number;
