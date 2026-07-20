@@ -240,12 +240,20 @@ export class CashSessionsService {
       .andWhere('o.paidAt <= :closedAt', { closedAt })
       .getRawOne<{ total: string }>();
 
+    // Card/mobile buckets also count store-scoped online orders that were
+    // paid during the window with no staff attribution (storefront paystack/
+    // wallet auto-payments never touch a cashier). Cash stays staff-only —
+    // unattributed cash never entered this drawer. Caveat (accepted): when
+    // two registers are open concurrently in one store, both closes will
+    // include the same online rows.
     const cardRow = await this.orderRepo
       .createQueryBuilder('o')
       .select('COALESCE(SUM(o.paidAmount), 0)', 'total')
       .where('o.businessId = :businessId', { businessId: session.businessId })
       .andWhere('o.storeId = :storeId', { storeId: session.storeId })
-      .andWhere('o.staffId IN (:...staffIds)', { staffIds: sessionStaffIds })
+      .andWhere('(o.staffId IN (:...staffIds) OR o.staffId IS NULL)', {
+        staffIds: sessionStaffIds,
+      })
       .andWhere('o.paymentChannel IN (:...chs)', { chs: ['card', 'paystack'] })
       .andWhere('o.paidAt >= :openedAt', { openedAt: session.openedAt })
       .andWhere('o.paidAt <= :closedAt', { closedAt })
@@ -256,7 +264,9 @@ export class CashSessionsService {
       .select('COALESCE(SUM(o.paidAmount), 0)', 'total')
       .where('o.businessId = :businessId', { businessId: session.businessId })
       .andWhere('o.storeId = :storeId', { storeId: session.storeId })
-      .andWhere('o.staffId IN (:...staffIds)', { staffIds: sessionStaffIds })
+      .andWhere('(o.staffId IN (:...staffIds) OR o.staffId IS NULL)', {
+        staffIds: sessionStaffIds,
+      })
       .andWhere('o.paymentChannel IN (:...chs)', { chs: ['wallet', 'points'] })
       .andWhere('o.paidAt >= :openedAt', { openedAt: session.openedAt })
       .andWhere('o.paidAt <= :closedAt', { closedAt })
@@ -442,27 +452,37 @@ export class CashSessionsService {
       new Set([session.staffId, ...(session.staffIdsJoined ?? [])]),
     );
 
-    const agg = (channels: string[]) =>
+    // includeUnattributed mirrors close(): online orders (no staffId) count
+    // toward non-cash buckets; cash stays staff-only.
+    const agg = (channels: string[], includeUnattributed = false) =>
       this.orderRepo
         .createQueryBuilder('o')
         .select('COALESCE(SUM(o.paidAmount), 0)', 'total')
         .addSelect('COUNT(*)', 'count')
         .where('o.businessId = :businessId', { businessId: session.businessId })
         .andWhere('o.storeId = :storeId', { storeId: session.storeId })
-        .andWhere('o.staffId IN (:...staffIds)', { staffIds: sessionStaffIds })
+        .andWhere(
+          includeUnattributed
+            ? '(o.staffId IN (:...staffIds) OR o.staffId IS NULL)'
+            : 'o.staffId IN (:...staffIds)',
+          { staffIds: sessionStaffIds },
+        )
         .andWhere('o.paymentChannel IN (:...chs)', { chs: channels })
         .andWhere('o.paidAt >= :from', { from: session.openedAt })
         .andWhere('o.paidAt <= :to', { to: until })
         .getRawOne<{ total: string; count: string }>();
 
     const cash = await agg(['cash']);
-    const pos = await agg(['card', 'paystack']);
+    const pos = await agg(['card', 'paystack'], true);
+    const mobile = await agg(['wallet', 'points'], true);
     const cashAmount = Number(cash?.total ?? 0);
     const cashCount = Number(cash?.count ?? 0);
     const posAmount = Number(pos?.total ?? 0);
     const posCount = Number(pos?.count ?? 0);
-    const grandTotal = cashAmount + posAmount;
-    const orderCount = cashCount + posCount;
+    const mobileAmount = Number(mobile?.total ?? 0);
+    const mobileCount = Number(mobile?.count ?? 0);
+    const grandTotal = cashAmount + posAmount + mobileAmount;
+    const orderCount = cashCount + posCount + mobileCount;
 
     const fmtDate = (d: Date) => {
       const p = (n: number) => String(n).padStart(2, '0');
@@ -512,6 +532,7 @@ export class CashSessionsService {
       row('Cheques', '-', '0');
       row('Cash', money(cashAmount), String(cashCount));
       row('Pos', money(posAmount), String(posCount));
+      row('Online / Wallet', money(mobileAmount), String(mobileCount));
       row('Order Grand Total', money(grandTotal), String(orderCount));
       doc.moveDown(2);
       doc.fontSize(10).text('Thank You!', { align: 'center' });

@@ -5,6 +5,7 @@ import { ProductEntity } from './entities/product.entity';
 import { ProductVariationEntity } from './entities/product-variation.entity';
 import { ProductIngredientEntity } from './entities/product-ingredient.entity';
 import { AddOnGroupEntity } from '../addon-groups/entities/addon-group.entity';
+import { CategoryEntity } from '../categories/entities/category.entity';
 import { CreateProductDto, CreateVariationDto } from './dto/create-product.dto';
 import { UpdateProductDto, UpdateVariationDto, ToggleProductStatusDto } from './dto/update-product.dto';
 import { FilterProductDto } from './dto/filter-product.dto';
@@ -28,8 +29,45 @@ export class ProductsService {
     private readonly productIngredientRepo: Repository<ProductIngredientEntity>,
     @InjectRepository(AddOnGroupEntity)
     private readonly addonGroupRepo: Repository<AddOnGroupEntity>,
+    @InjectRepository(CategoryEntity)
+    private readonly categoryRepo: Repository<CategoryEntity>,
     private readonly storage: StorageService,
   ) {}
+
+  /**
+   * Attaches a denormalised categoryName to each product so clients can match
+   * products to their category list even when categoryId points at a
+   * soft-deleted (or otherwise stale) category — the cause of "category pills
+   * missing on the POS although the items show under All".
+   */
+  private async attachCategoryNames(
+    products: ProductEntity[],
+  ): Promise<Array<ProductEntity & { categoryName: string | null }>> {
+    // categoryId is a plain varchar column — guard against non-UUID junk
+    // (e.g. "null") before querying the uuid-typed categories.id.
+    const UUID_RE =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const ids = Array.from(
+      new Set(
+        products
+          .map((p) => p.categoryId)
+          .filter((id): id is string => !!id && UUID_RE.test(id)),
+      ),
+    );
+    const names = new Map<string, string>();
+    if (ids.length > 0) {
+      const categories = await this.categoryRepo.find({
+        where: { id: In(ids) },
+        withDeleted: true,
+      });
+      for (const c of categories) names.set(c.id, c.name);
+    }
+    return products.map((p) =>
+      Object.assign(p, {
+        categoryName: p.categoryId ? (names.get(p.categoryId) ?? null) : null,
+      }),
+    );
+  }
 
   private async resolveImageFields(
     target: { imageUrl?: string | null; imageFileId?: string | null },
@@ -100,11 +138,13 @@ export class ProductsService {
       take: limit,
     });
 
-    return paginate(data, total, page, limit, ProductResponseDto.from);
+    const withNames = await this.attachCategoryNames(data);
+    return paginate(withNames, total, page, limit, ProductResponseDto.from);
   }
 
   async findOne(id: string): Promise<ProductResponseDto> {
-    return ProductResponseDto.from(await this.findEntity(id));
+    const [entity] = await this.attachCategoryNames([await this.findEntity(id)]);
+    return ProductResponseDto.from(entity);
   }
 
   private async findEntity(id: string): Promise<ProductEntity> {

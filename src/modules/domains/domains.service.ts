@@ -88,20 +88,39 @@ export class DomainsService {
 
   async verify(businessId: string, id: string): Promise<DomainResponseDto> {
     const domain = await this.findEntity(businessId, id);
-    let txtRecords: string[][] = [];
-    try {
-      txtRecords = await dns.resolveTxt(`_mrjollof-challenge.${domain.hostname}`);
-    } catch (err) {
+
+    // Ownership is proven by EITHER the challenge TXT record OR a CNAME
+    // pointing the hostname at our ingress — many registrars make one or the
+    // other awkward, so accept both.
+    const txtOk = await dns
+      .resolveTxt(`_mrjollof-challenge.${domain.hostname}`)
+      .then((records) => records.flat().includes(domain.verificationToken))
+      .catch(() => false);
+
+    let cnameOk = false;
+    if (!txtOk) {
+      const target = (
+        this.config.get<string>('domains.cnameTarget') ?? 'app.mrjollof.com'
+      )
+        .toLowerCase()
+        .replace(/\.$/, '');
+      cnameOk = await dns
+        .resolveCname(domain.hostname)
+        .then((records) =>
+          records.some((r) => r.toLowerCase().replace(/\.$/, '') === target),
+        )
+        .catch(() => false);
+    }
+
+    if (!txtOk && !cnameOk) {
       throw new BadRequestException(
-        `DNS lookup failed: ${(err as Error).message}. Add the TXT record and try again.`,
+        'Verification failed — DNS records not found (they can take up to an ' +
+          'hour to propagate). Add the TXT record exactly as shown in ' +
+          'dnsRecords, or point a CNAME from your domain to ' +
+          `${this.config.get<string>('domains.cnameTarget') ?? 'app.mrjollof.com'}, then try again.`,
       );
     }
-    const flat = txtRecords.flat();
-    if (!flat.includes(domain.verificationToken)) {
-      throw new BadRequestException(
-        'Verification TXT record not found. Add the record exactly as shown in dnsRecords.',
-      );
-    }
+
     domain.verifiedAt = new Date();
     domain.sslStatus = 'pending';
     const saved = await this.repo.save(domain);

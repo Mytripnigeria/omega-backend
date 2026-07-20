@@ -13,6 +13,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { OrderEntity } from '../../orders/entities/order.entity';
 
 export enum DeliveryStatus {
+  /**
+   * Created but not yet handed off by the waiter ("Send for delivery").
+   * Invisible to riders — the Delivery board only lists PENDING onwards.
+   */
+  AWAITING_DISPATCH = 'awaiting_dispatch',
   PENDING = 'pending',
   ASSIGNED = 'assigned',
   IN_TRANSIT = 'in_transit',
@@ -74,6 +79,23 @@ export class DeliveryEntity {
   @Column({ type: 'enum', enum: DeliveryStatus, default: DeliveryStatus.PENDING })
   @Index()
   status: DeliveryStatus;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description: 'When the waiter sent the order out to the delivery board.',
+  })
+  @Column({ type: 'timestamptz', nullable: true })
+  dispatchedAt: Date | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @Column({ type: 'uuid', nullable: true })
+  dispatchedByStaffId: string | null;
+
+  @ApiPropertyOptional({ nullable: true, example: 'Jenifer Okpe' })
+  @Column({ type: 'varchar', nullable: true })
+  dispatchedByName: string | null;
 
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
   @Column({ type: 'timestamptz', nullable: true })

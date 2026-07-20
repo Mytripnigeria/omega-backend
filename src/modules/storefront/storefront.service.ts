@@ -19,6 +19,7 @@ import { StorefrontBannerEntity } from './entities/storefront-banner.entity';
 import { StorefrontThemePresetEntity } from './entities/storefront-theme-preset.entity';
 import { StorefrontPageViewEntity } from './entities/storefront-page-view.entity';
 import { PaymentMethodEntity } from '../payment-methods/entities/payment-method.entity';
+import { DomainEntity } from '../domains/entities/domain.entity';
 import { UpdateStorefrontConfigDto } from './dto/config.dto';
 import {
   CreateStorefrontPageDto,
@@ -112,6 +113,8 @@ export class StorefrontService implements OnModuleInit {
     private readonly viewRepo: Repository<StorefrontPageViewEntity>,
     @InjectRepository(PaymentMethodEntity)
     private readonly paymentMethodRepo: Repository<PaymentMethodEntity>,
+    @InjectRepository(DomainEntity)
+    private readonly domainRepo: Repository<DomainEntity>,
     private readonly activityLog: ActivityLogService,
     private readonly business: BusinessService,
     private readonly loyalty: LoyaltyService,
@@ -604,6 +607,10 @@ export class StorefrontService implements OnModuleInit {
    * Resolve a businessId from the request hostname (custom domain). Lets a
    * single storefront deployment serve any merchant by domain — e.g.
    * scoops.ng -> the business whose `customDomain` is "scoops.ng".
+   *
+   * Falls back to the Domains module: any VERIFIED domain added in the
+   * merchant hub (Settings → Domains) resolves too, so merchants don't have
+   * to duplicate the hostname into the storefront config.
    */
   async resolveByDomain(host: string): Promise<{ businessId: string }> {
     const normalized = (host ?? '')
@@ -618,8 +625,22 @@ export class StorefrontService implements OnModuleInit {
       .createQueryBuilder('c')
       .where('LOWER(c.customDomain) = :host', { host: normalized })
       .getOne();
-    if (!config) throw new NotFoundException('No storefront for this domain');
-    return { businessId: config.businessId };
+    if (config) return { businessId: config.businessId };
+
+    // Match against verified merchant domains (stored with or without www).
+    // Earliest verification wins if two merchants ever claimed the same host.
+    const domain = await this.domainRepo
+      .createQueryBuilder('d')
+      .where('d.verifiedAt IS NOT NULL')
+      .andWhere(
+        "LOWER(d.hostname) IN (:...hosts)",
+        { hosts: [normalized, `www.${normalized}`] },
+      )
+      .orderBy('d.verifiedAt', 'ASC')
+      .getOne();
+    if (domain) return { businessId: domain.businessId };
+
+    throw new NotFoundException('No storefront for this domain');
   }
 
   /**

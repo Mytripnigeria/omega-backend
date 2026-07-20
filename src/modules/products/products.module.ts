@@ -4,6 +4,7 @@ import { ProductEntity } from './entities/product.entity';
 import { ProductVariationEntity } from './entities/product-variation.entity';
 import { ProductIngredientEntity } from './entities/product-ingredient.entity';
 import { AddOnGroupEntity } from '../addon-groups/entities/addon-group.entity';
+import { CategoryEntity } from '../categories/entities/category.entity';
 import { ProductsService } from './products.service';
 import { ProductsController } from './products.controller';
 import { StorageModule } from '../storage/storage.module';
@@ -15,6 +16,7 @@ import { StorageModule } from '../storage/storage.module';
       ProductVariationEntity,
       ProductIngredientEntity,
       AddOnGroupEntity,
+      CategoryEntity,
     ]),
     StorageModule,
   ],

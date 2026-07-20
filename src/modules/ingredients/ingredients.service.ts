@@ -468,10 +468,13 @@ export class IngredientsService {
   }
 
   /**
-   * Staff-facing location-to-location transfer for one ingredient. Enforces
-   * that the destination already stocks the item (no receivable location =
-   * no transfer), moves the stock, and records a TRANSFER movement naming the
-   * sending and receiving locations so the movement log shows both.
+   * Staff-facing location-to-location transfer for one ingredient. The
+   * destination doesn't need to stock the item yet — transferBetweenLocations
+   * auto-creates the destination stock row, which is exactly how an item
+   * becomes available at a new location (client spec: transfers are how items
+   * come to exist in multiple locations). Moves the stock and records a
+   * TRANSFER movement naming the sending and receiving locations so the
+   * movement log shows both.
    */
   async transferToLocation(
     actor: ActorContext,
@@ -483,18 +486,29 @@ export class IngredientsService {
       reason?: string;
     },
   ): Promise<void> {
-    const dest = await this.locationStockRepo.findOne({
-      where: { ingredientId, locationId: dto.toLocationId },
+    const ingredient = await this.ingredientRepo.findOne({
+      where: { id: ingredientId },
     });
-    if (!dest) {
-      throw new BadRequestException(
-        'Transfer not possible — the item is not stocked at the destination location',
-      );
+    if (!ingredient) {
+      throw new NotFoundException(`Ingredient ${ingredientId} not found`);
     }
     const [fromLoc, toLoc] = await Promise.all([
       this.inventoryLocationRepo.findOne({ where: { id: dto.fromLocationId } }),
       this.inventoryLocationRepo.findOne({ where: { id: dto.toLocationId } }),
     ]);
+    if (!fromLoc || !toLoc) {
+      throw new NotFoundException('Source or destination location not found');
+    }
+    // Both ends must belong to the ingredient's store — a transfer can't move
+    // stock across stores.
+    if (
+      fromLoc.storeId !== ingredient.storeId ||
+      toLoc.storeId !== ingredient.storeId
+    ) {
+      throw new BadRequestException(
+        'Source and destination locations must belong to this store',
+      );
+    }
 
     await this.dataSource.transaction(async (m) => {
       await this.transferBetweenLocations(
