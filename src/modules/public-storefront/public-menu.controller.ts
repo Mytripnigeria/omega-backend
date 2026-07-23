@@ -89,8 +89,16 @@ export class PublicMenuController {
     const now = new Date();
     const target = isoDate ? new Date(`${isoDate}T00:00:00`) : new Date(now);
     target.setHours(0, 0, 0, 0);
-    const dateStr = target.toISOString().slice(0, 10);
-    const isToday = dateStr === now.toISOString().slice(0, 10);
+    // Format the date from LOCAL components, not toISOString(): the process
+    // runs on the merchant's timezone (Africa/Lagos), so toISOString() would
+    // shift local midnight back into the previous UTC day and make `isToday`
+    // wrong — which stopped past slots being trimmed and broke ASAP gating.
+    const localDate = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+        d.getDate(),
+      ).padStart(2, '0')}`;
+    const dateStr = localDate(target);
+    const isToday = dateStr === localDate(now);
 
     const dayKeys = [
       'sunday',
@@ -168,10 +176,17 @@ export class PublicMenuController {
   })
   @ApiQuery({ name: 'businessId', format: 'uuid' })
   @Get('menu/categories')
-  async categories(@Query('businessId') businessId: string) {
+  async categories(
+    @Query('businessId') businessId: string,
+    @Query('storeId') storeId?: string,
+  ) {
     if (!businessId) throw new BadRequestException('businessId is required');
+    // Categories are store-scoped — when the storefront passes its resolved
+    // store, return only that store's categories.
     const cats = await this.categoryRepo.find({
-      where: { businessId, isActive: true },
+      where: storeId
+        ? { businessId, storeId, isActive: true }
+        : { businessId, isActive: true },
       order: { order: 'ASC', createdAt: 'ASC' },
     });
     return cats.map(CategoryResponseDto.from);

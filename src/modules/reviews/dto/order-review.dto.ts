@@ -70,6 +70,10 @@ export class OrderReviewResponseDto {
   @Expose()
   orderId: string;
 
+  @ApiPropertyOptional({ example: 42, nullable: true, description: 'Human-facing number of the reviewed order' })
+  @Expose()
+  orderNumber: number | null;
+
   @ApiProperty({ format: 'uuid' })
   @Expose()
   customerId: string;

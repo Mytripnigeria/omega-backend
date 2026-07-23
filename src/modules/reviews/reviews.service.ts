@@ -100,7 +100,22 @@ export class ReviewsService {
       qb.andWhere('r.rating = :rating', { rating: filter.rating });
 
     const [data, total] = await qb.getManyAndCount();
-    return paginate(data, total, page, limit, OrderReviewResponseDto.from);
+
+    // Attach the human-facing order number so the merchant Reviews page can
+    // show "which order this review is affiliated to" without a UUID.
+    const orderIds = Array.from(new Set(data.map((r) => r.orderId)));
+    const orderNumbers = new Map<string, number>();
+    if (orderIds.length > 0) {
+      const orders = await this.orderRepo.find({
+        where: orderIds.map((id) => ({ id })),
+        select: { id: true, orderNumber: true },
+      });
+      for (const o of orders) orderNumbers.set(o.id, o.orderNumber);
+    }
+    const enriched = data.map((r) =>
+      Object.assign(r, { orderNumber: orderNumbers.get(r.orderId) ?? null }),
+    );
+    return paginate(enriched, total, page, limit, OrderReviewResponseDto.from);
   }
 
   async listPublic(

@@ -74,6 +74,7 @@ export class AddOnGroupsService {
     const { page = 1, limit = 20, search } = query;
     const where: FindOptionsWhere<AddOnGroupEntity> = { businessId };
 
+    if (query.storeId) where.storeId = query.storeId;
     if (search) where.name = Like(`%${search}%`);
 
     const [data, total] = await this.groupRepo.findAndCount({

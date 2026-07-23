@@ -18,7 +18,11 @@ export enum CategoryType {
 }
 
 @Entity('categories')
-@Unique(['businessId', 'type', 'name'])
+// Categories belong to a store (client spec, sixth feedback). Uniqueness is
+// per-store so two branches can each have their own "Rice" category. businessId
+// is kept for tenant-level queries but a category always names a storeId.
+@Unique(['storeId', 'type', 'name'])
+@Index(['storeId', 'type'])
 @Index(['businessId', 'type'])
 export class CategoryEntity {
   @ApiProperty({ format: 'uuid', example: '7c4a8d09-f2a3-4f1a-8c3e-9a4f0c4e2b21' })
@@ -65,6 +69,11 @@ export class CategoryEntity {
   @Column({ type: 'uuid' })
   @Index()
   businessId: string;
+
+  @ApiProperty({ format: 'uuid', description: 'Store this category belongs to' })
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  storeId: string | null;
 
   @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn({ type: 'timestamptz' })

@@ -114,6 +114,10 @@ export class AddOnGroupResponseDto {
   @Expose()
   businessId: string;
 
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'Store this add-on group belongs to' })
+  @Expose()
+  storeId: string | null;
+
   @ApiProperty({ type: () => [AddOnResponseDto] })
   @Expose()
   @Type(() => AddOnResponseDto)

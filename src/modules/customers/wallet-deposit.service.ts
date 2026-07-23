@@ -17,9 +17,10 @@ import { UserJwtPayload } from '../../common/types/jwt-payload.types';
 export interface WalletDepositInit {
   reference: string;
   amount: number;
-  authorizationUrl: string;
-  accessCode: string;
+  /** Amount in kobo for the inline popup. */
+  amountKobo: number;
   publicKey: string;
+  email: string;
 }
 
 /**
@@ -77,29 +78,24 @@ export class WalletDepositService {
     if (!customer) throw new NotFoundException('Customer not found');
 
     const cred = await this.requireCreds(user.businessId);
+    if (!cred.publicKey) {
+      throw new BadRequestException(
+        'Wallet top-up is unavailable — this store has not set its Paystack public key.',
+      );
+    }
     const reference = `${WalletDepositService.REF_PREFIX}_${Date.now()}_${randomUUID().slice(0, 8)}`;
 
-    const init = await this.paystack.initialize(
-      {
-        email: customer.email ?? `customer-${customer.id}@no-email.local`,
-        // Paystack works in kobo.
-        amount: Math.round(amount * 100),
-        reference,
-        metadata: {
-          purpose: 'wallet_deposit',
-          customerId: customer.id,
-          businessId: user.businessId,
-        },
-      },
-      cred.secretKey,
-    );
-
+    // Do NOT pre-initialize the Paystack transaction: the inline popup
+    // (PaystackPop.setup) initializes the reference itself, and a duplicate
+    // server-side initialize with the same reference is what forced the old
+    // redirect fallback. We only return the reference + public key; verify()
+    // confirms the collected amount before crediting.
     return {
-      reference: init.reference,
+      reference,
       amount,
-      authorizationUrl: init.authorizationUrl,
-      accessCode: init.accessCode,
-      publicKey: cred.publicKey ?? '',
+      amountKobo: Math.round(amount * 100),
+      publicKey: cred.publicKey,
+      email: customer.email ?? `customer-${customer.id}@no-email.local`,
     };
   }
 

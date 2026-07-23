@@ -51,9 +51,13 @@ export class CategoriesService {
     businessId: string,
     query: FilterCategoryDto,
   ): Promise<PaginatedResponseDto<CategoryResponseDto>> {
-    const { page = 1, limit = 20, search, status, type } = query;
+    const { page = 1, limit = 20, search, status, type, storeId } = query;
     const where: FindOptionsWhere<CategoryEntity> = { businessId };
 
+    // Categories are store-scoped: the POS/self-order surfaces (and the
+    // merchant hub) pass the current store so a branch only sees its own
+    // categories, not every store's.
+    if (storeId) where.storeId = storeId;
     if (status !== undefined) where.isActive = status;
     if (type) where.type = type;
     if (search) where.name = Like(`%${search}%`);

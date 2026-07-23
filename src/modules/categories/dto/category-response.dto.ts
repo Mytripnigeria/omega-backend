@@ -47,6 +47,10 @@ export class CategoryResponseDto {
   @Expose()
   businessId: string;
 
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'Store this category belongs to' })
+  @Expose()
+  storeId: string | null;
+
   @ApiProperty({ example: 0, description: 'Number of products in this category. Computed at read time.' })
   @Expose()
   productCount: number;

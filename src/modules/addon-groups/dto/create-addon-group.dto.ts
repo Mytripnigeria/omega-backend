@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsBoolean, IsNumber, IsArray, ValidateNested } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsNumber, IsArray, IsUUID, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -46,6 +46,10 @@ export class CreateAddOnDto {
 }
 
 export class CreateAddOnGroupDto {
+  @ApiProperty({ format: 'uuid', description: 'Store this add-on group belongs to' })
+  @IsUUID()
+  storeId: string;
+
   @ApiProperty({ example: 'Proteins', description: 'Addon group display name' })
   @IsString()
   name: string;

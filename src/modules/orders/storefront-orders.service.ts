@@ -56,6 +56,8 @@ export interface PlaceOrderResult {
     accessCode?: string;
     reference?: string;
     publicKey?: string;
+    /** Amount in kobo for the inline popup (server-authoritative). */
+    amount?: number;
   };
 }
 
@@ -477,21 +479,20 @@ export class StorefrontOrdersService {
               'Card payment is unavailable — this store has not set its Paystack public key.',
             );
           }
-          const init = await this.paystack.initialize(
-            {
-              email: this.emailFor(customer),
-              amount: Math.round(total * 100),
-              reference: saved.paymentReference!,
-              metadata: { orderId: saved.id, orderNumber: saved.orderNumber },
-            },
-            creds.secretKey,
-          );
+          // Do NOT pre-initialize the transaction here. The Paystack inline
+          // popup (PaystackPop.setup) initializes the reference itself, so a
+          // server-side initialize with the SAME reference makes Paystack
+          // reject the second one as a "Duplicate Transaction Reference" — the
+          // popup never opens (which is what pushed the old code to fall back
+          // to a full-page redirect). We only hand the client the reference we
+          // stamped on the order + the public key; the amount is re-checked
+          // server-side in verifyPayment so a tampered popup amount can never
+          // complete the order.
           payment = {
             requiresAction: true,
-            authorizationUrl: init.authorizationUrl,
-            accessCode: init.accessCode,
-            reference: init.reference,
+            reference: saved.paymentReference!,
             publicKey: creds.publicKey,
+            amount: Math.round(total * 100),
           };
         }
       } else if (
@@ -550,6 +551,16 @@ export class StorefrontOrdersService {
     const creds = await this.requirePaystackCreds(user.businessId);
     const verified = await this.paystack.verify(reference, creds.secretKey);
     if (verified.status === 'success') {
+      // The popup amount is set client-side now (no server pre-initialize), so
+      // confirm Paystack actually collected at least the order total before we
+      // fulfil it — a tampered popup that underpays can never complete.
+      const paidKobo = Number(verified.amount);
+      const dueKobo = Math.round(Number(order.total) * 100);
+      if (Number.isFinite(paidKobo) && paidKobo + 1 < dueKobo) {
+        throw new BadRequestException(
+          'Payment amount does not match the order total.',
+        );
+      }
       await this.markOrderPaid(orderId, reference);
       // Persist authorization for one-click future checkouts
       if (verified.authorization?.reusable) {

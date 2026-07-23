@@ -13,7 +13,9 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AddOnEntity } from './addon.entity';
 
 @Entity('addon_groups')
-@Unique(['businessId', 'name'])
+// Add-on groups are store-scoped (client spec, sixth feedback) — uniqueness is
+// per-store so each branch keeps its own add-on catalogue.
+@Unique(['storeId', 'name'])
 export class AddOnGroupEntity {
   @ApiProperty({ format: 'uuid', example: 'ag1a2b3c-1234-4f1a-8c3e-9a4f0c4e2b21' })
   @PrimaryGeneratedColumn('uuid')
@@ -39,6 +41,11 @@ export class AddOnGroupEntity {
   @Column({ type: 'uuid' })
   @Index()
   businessId: string;
+
+  @ApiProperty({ format: 'uuid', description: 'Store this add-on group belongs to' })
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  storeId: string | null;
 
   @ApiProperty({ type: () => [AddOnEntity] })
   @OneToMany(() => AddOnEntity, (addon) => addon.addOnGroup, {

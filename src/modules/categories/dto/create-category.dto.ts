@@ -3,7 +3,12 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CategoryType } from '../entities/category.entity';
 
 export class CreateCategoryDto {
-  /** Display name. Must be unique within the (business, type) pair. */
+  /** Store this category belongs to (categories are store-scoped, sixth feedback). */
+  @ApiProperty({ format: 'uuid', description: 'Store this category belongs to' })
+  @IsUUID()
+  storeId: string;
+
+  /** Display name. Must be unique within the (store, type) pair. */
   @ApiProperty({ example: 'Mains', description: 'Display name for the category' })
   @IsString()
   name: string;
