@@ -19,6 +19,7 @@ import { DeliveryResponseDto } from './dto/delivery-response.dto';
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { OrdersService } from '../orders/orders.service';
+import { endOfDayFilter, startOfDayFilter } from '../../common/utils/date-range';
 
 interface ActorContext {
   sub: string;
@@ -128,8 +129,8 @@ export class DeliveriesService {
       if (statuses.length) qb.andWhere('d.status IN (:...statuses)', { statuses });
     }
 
-    if (filter.dateFrom) qb.andWhere('d.createdAt >= :df', { df: filter.dateFrom });
-    if (filter.dateTo) qb.andWhere('d.createdAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
+    if (filter.dateFrom) qb.andWhere('d.createdAt >= :df', { df: startOfDayFilter(filter.dateFrom) });
+    if (filter.dateTo) qb.andWhere('d.createdAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     const [data, total] = await qb.getManyAndCount();
     return paginate(data, total, page, limit, DeliveryResponseDto.from);

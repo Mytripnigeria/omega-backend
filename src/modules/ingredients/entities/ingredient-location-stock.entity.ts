@@ -63,7 +63,7 @@ export class IngredientLocationStockEntity {
   minStock!: number;
 
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   lastRestocked!: Date | null;
 
   @ApiPropertyOptional({ example: '2026-06-12', nullable: true })
@@ -71,10 +71,10 @@ export class IngredientLocationStockEntity {
   expiryDate!: string | null;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt!: Date;
 }

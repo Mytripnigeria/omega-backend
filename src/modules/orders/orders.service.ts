@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { OrderEntity, OrderStatus } from './entities/order.entity';
 import { OrderItemEntity } from './entities/order-item.entity';
 import { OrderStatusEventEntity } from './entities/order-status-event.entity';
@@ -41,6 +41,10 @@ import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.servic
 import { TableEntity, TableStatus } from '../tables/entities/table.entity';
 import { PushService } from '../push-notifications/push.service';
 import { ProductIngredientEntity } from '../products/entities/product-ingredient.entity';
+import { ProductVariationEntity } from '../products/entities/product-variation.entity';
+import { ComboItemEntity } from '../combos/entities/combo-item.entity';
+import { AddonIngredientEntity } from '../addon-groups/entities/addon-ingredient.entity';
+import { DeliveryRegionEntity } from '../delivery-regions/entities/delivery-region.entity';
 import { ProductEntity } from '../products/entities/product.entity';
 import { IngredientEntity } from '../ingredients/entities/ingredient.entity';
 import {
@@ -54,6 +58,8 @@ import {
   DeliveryEntity,
   DeliveryStatus,
 } from '../deliveries/entities/delivery.entity';
+import { endOfDayFilter, startOfDayFilter } from '../../common/utils/date-range';
+import { computeEstimatedPrepMinutes } from './prep-time.util';
 
 const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   // INITIATED is the new entry state for every channel. A cashier Accepts
@@ -117,6 +123,8 @@ export class OrdersService {
     private readonly tableRepo: Repository<TableEntity>,
     @InjectRepository(ProductIngredientEntity)
     private readonly productIngredientRepo: Repository<ProductIngredientEntity>,
+    @InjectRepository(DeliveryRegionEntity)
+    private readonly deliveryRegionRepo: Repository<DeliveryRegionEntity>,
     @InjectRepository(ProductEntity)
     private readonly productRepo: Repository<ProductEntity>,
     @InjectRepository(DeliveryEntity)
@@ -135,16 +143,111 @@ export class OrdersService {
   ) {}
 
   /**
+   * Reads the variation id an order item was snapshotted with. The jsonb
+   * snapshot has drifted across clients over time (`variationId`, `id`,
+   * `optionId`), so accept any of them; a name-only snapshot is resolved by
+   * the caller against the product's variation list.
+   */
+  private static variationIdOf(
+    variation: Record<string, unknown> | null,
+  ): string | null {
+    if (!variation) return null;
+    for (const key of ['variationId', 'id', 'optionId']) {
+      const v = variation[key];
+      if (typeof v === 'string' && v.length > 0) return v;
+    }
+    return null;
+  }
+
+  /** Same tolerance for add-on snapshots (`addonId`, `id`, `addOnId`). */
+  private static addonIdOf(addon: Record<string, unknown>): string | null {
+    for (const key of ['addonId', 'id', 'addOnId']) {
+      const v = addon[key];
+      if (typeof v === 'string' && v.length > 0) return v;
+    }
+    return null;
+  }
+
+  /**
+   * Expands every order item into the flat list of {productId, variationId,
+   * units} the kitchen actually makes, so recipes can be resolved uniformly:
+   *
+   *  - a plain product line contributes itself × quantity;
+   *  - a COMBO line contributes each of its member products × comboItem.quantity
+   *    × line quantity, so a combo deducts the inventory of each item as set on
+   *    that item's own product (client spec);
+   *  - the variation the customer picked rides along so variation-scoped
+   *    recipes win over the product-level default.
+   */
+  private async expandOrderItemsToProducts(
+    m: import('typeorm').EntityManager,
+    items: OrderItemEntity[],
+  ): Promise<Array<{ productId: string; variationId: string | null; units: number }>> {
+    const out: Array<{ productId: string; variationId: string | null; units: number }> = [];
+
+    const comboIds = Array.from(
+      new Set(items.map((i) => i.comboId).filter((id): id is string => !!id)),
+    );
+    const comboItemsByCombo = new Map<string, ComboItemEntity[]>();
+    if (comboIds.length > 0) {
+      const comboItems = await m.getRepository(ComboItemEntity).find({
+        where: { comboId: In(comboIds) },
+      });
+      for (const ci of comboItems) {
+        const list = comboItemsByCombo.get(ci.comboId) ?? [];
+        list.push(ci);
+        comboItemsByCombo.set(ci.comboId, list);
+      }
+    }
+
+    for (const item of items) {
+      const qty = Number(item.quantity) || 0;
+      if (qty <= 0) continue;
+
+      if (item.comboId) {
+        for (const ci of comboItemsByCombo.get(item.comboId) ?? []) {
+          if (!ci.productId) continue;
+          out.push({
+            productId: ci.productId,
+            // A combo bundles concrete products, not variations — always use
+            // the member product's default recipe.
+            variationId: null,
+            units: qty * (Number(ci.quantity) || 1),
+          });
+        }
+        continue;
+      }
+
+      if (!item.productId) continue;
+      out.push({
+        productId: item.productId,
+        variationId: OrdersService.variationIdOf(item.variation),
+        units: qty,
+      });
+    }
+
+    return out;
+  }
+
+  /**
    * Deducts each order item's recipe ingredients from inventory and records
    * a CONSUMPTION movement per ingredient, so the merchant hub history view
    * shows what each completed order consumed. Deduction happens at the first
    * acceptance of the order (client spec: "deductions are instantly made" when
    * an order is taken on), with completion/payment as the fallback trigger for
    * orders that skipped acceptance — the ingredientsConsumedAt flag makes the
-   * whole thing idempotent. If an ingredient has per-location stock rows, we
-   * debit the location holding the most stock (best effort: orders don't
-   * carry a location context). Callers must save the order in the same tx so
-   * the flag persists.
+   * whole thing idempotent.
+   *
+   * Three sources of demand are summed (client spec, fifth feedback):
+   *   1. products — combos expand into their member products first;
+   *   2. variations — when the ordered variation has its own recipe rows those
+   *      replace the product-level default entirely; products without a
+   *      variation-scoped recipe fall back to the default rows;
+   *   3. add-ons — each selected add-on option consumes its own recipe.
+   *
+   * If an ingredient has per-location stock rows, we debit the location
+   * holding the most stock (best effort: orders don't carry a location
+   * context). Callers must save the order in the same tx so the flag persists.
    */
   private async consumeIngredientsForOrder(
     m: import('typeorm').EntityManager,
@@ -158,35 +261,111 @@ export class OrdersService {
     });
     if (items.length === 0) return;
 
-    // Sum required quantity per ingredient across all order items.
-    const productIds = Array.from(
-      new Set(items.map((i) => i.productId).filter((id): id is string => !!id)),
-    );
-    if (productIds.length === 0) return;
-
-    const recipes = await m.getRepository(ProductIngredientEntity).find({
-      where: productIds.map((id) => ({ productId: id })),
-    });
-    if (recipes.length === 0) return;
-
-    const recipesByProduct = new Map<string, ProductIngredientEntity[]>();
-    for (const r of recipes) {
-      const list = recipesByProduct.get(r.productId) ?? [];
-      list.push(r);
-      recipesByProduct.set(r.productId, list);
-    }
-
     const required = new Map<string, number>();
-    for (const item of items) {
-      if (!item.productId) continue;
-      const recipe = recipesByProduct.get(item.productId);
-      if (!recipe) continue;
-      const qty = Number(item.quantity);
-      for (const r of recipe) {
-        const need = qty * Number(r.quantity);
-        required.set(r.ingredientId, (required.get(r.ingredientId) ?? 0) + need);
+    const add = (ingredientId: string, need: number) => {
+      if (!(need > 0)) return;
+      required.set(ingredientId, (required.get(ingredientId) ?? 0) + need);
+    };
+
+    // ---- 1 & 2. products (combos expanded) with variation-aware recipes ----
+    const expanded = await this.expandOrderItemsToProducts(m, items);
+    const productIds = Array.from(new Set(expanded.map((e) => e.productId)));
+
+    if (productIds.length > 0) {
+      const recipes = await m.getRepository(ProductIngredientEntity).find({
+        where: { productId: In(productIds) },
+      });
+
+      // productId -> variationId ('' = product-level default) -> recipe rows
+      const recipesByProduct = new Map<
+        string,
+        Map<string, ProductIngredientEntity[]>
+      >();
+      for (const r of recipes) {
+        let byVariation = recipesByProduct.get(r.productId);
+        if (!byVariation) {
+          byVariation = new Map();
+          recipesByProduct.set(r.productId, byVariation);
+        }
+        const key = r.variationId ?? '';
+        const list = byVariation.get(key) ?? [];
+        list.push(r);
+        byVariation.set(key, list);
+      }
+
+      // Older clients snapshot the variation by name only. Resolve those to an
+      // id so their variation-scoped recipe still applies.
+      const nameOnly = expanded.filter((e) => !e.variationId);
+      if (nameOnly.length > 0) {
+        const namesByItem = new Map<OrderItemEntity, string>();
+        for (const item of items) {
+          if (!item.productId || OrdersService.variationIdOf(item.variation)) continue;
+          const name = item.variation?.['name'];
+          if (typeof name === 'string' && name.trim()) {
+            namesByItem.set(item, name.trim().toLowerCase());
+          }
+        }
+        if (namesByItem.size > 0) {
+          const variations = await m.getRepository(ProductVariationEntity).find({
+            where: { productId: In(productIds) },
+          });
+          for (const [item, lowerName] of namesByItem) {
+            const match = variations.find(
+              (v) =>
+                v.productId === item.productId &&
+                v.name.trim().toLowerCase() === lowerName,
+            );
+            if (!match) continue;
+            for (const e of expanded) {
+              if (e.productId === item.productId && !e.variationId) {
+                e.variationId = match.id;
+              }
+            }
+          }
+        }
+      }
+
+      for (const e of expanded) {
+        const byVariation = recipesByProduct.get(e.productId);
+        if (!byVariation) continue;
+        // Variation recipe wins; otherwise the product-level default.
+        const recipe =
+          (e.variationId ? byVariation.get(e.variationId) : undefined) ??
+          byVariation.get('') ??
+          [];
+        for (const r of recipe) add(r.ingredientId, e.units * Number(r.quantity));
       }
     }
+
+    // ---- 3. add-ons ----
+    const addonUnits = new Map<string, number>();
+    for (const item of items) {
+      const qty = Number(item.quantity) || 0;
+      if (qty <= 0 || !Array.isArray(item.addons)) continue;
+      for (const a of item.addons) {
+        if (!a || typeof a !== 'object') continue;
+        const addonId = OrdersService.addonIdOf(a as Record<string, unknown>);
+        if (!addonId) continue;
+        // An add-on may itself be ordered more than once on a single line.
+        const rawQty = (a as Record<string, unknown>)['quantity'];
+        const perLine = Number(rawQty);
+        const addonQty = Number.isFinite(perLine) && perLine > 0 ? perLine : 1;
+        addonUnits.set(
+          addonId,
+          (addonUnits.get(addonId) ?? 0) + qty * addonQty,
+        );
+      }
+    }
+    if (addonUnits.size > 0) {
+      const addonRecipes = await m.getRepository(AddonIngredientEntity).find({
+        where: { addOnId: In(Array.from(addonUnits.keys())) },
+      });
+      for (const r of addonRecipes) {
+        const units = addonUnits.get(r.addOnId) ?? 0;
+        add(r.ingredientId, units * Number(r.quantity));
+      }
+    }
+
     if (required.size === 0) return;
 
     const ingredientRepo = m.getRepository(IngredientEntity);
@@ -498,45 +677,6 @@ export class OrdersService {
   }
 
   /**
-   * Parses a free-text product prep time (e.g. "15 mins", "1 hr", "20") into a
-   * number of minutes. Returns 0 when nothing parseable is found.
-   */
-  private parsePrepMinutes(prepTime?: string | null): number {
-    if (!prepTime) return 0;
-    const text = prepTime.toLowerCase();
-    const match = text.match(/[\d.]+/);
-    const num = match ? parseFloat(match[0]) : 0;
-    if (!Number.isFinite(num) || num <= 0) return 0;
-    // Treat "h"/"hr"/"hour" as hours; otherwise minutes.
-    return /h(ou)?r?s?\b/.test(text) ? Math.round(num * 60) : Math.round(num);
-  }
-
-  /**
-   * Order prep time = the longest single item prep time (per client spec:
-   * "the prep time of an order is the prep time from the item with the longest
-   * prep time"), looked up from each line's product. Null when no product
-   * carries a parseable prep time.
-   */
-  private async computeEstimatedPrepMinutes(
-    manager: import('typeorm').EntityManager,
-    items: { productId?: string | null }[],
-  ): Promise<number | null> {
-    const productIds = Array.from(
-      new Set(items.map((i) => i.productId).filter((id): id is string => !!id)),
-    );
-    if (productIds.length === 0) return null;
-    const products = await manager
-      .getRepository(ProductEntity)
-      .find({ where: productIds.map((id) => ({ id })) });
-    let max = 0;
-    for (const p of products) {
-      const mins = this.parsePrepMinutes(p.prepTime);
-      if (mins > max) max = mins;
-    }
-    return max > 0 ? max : null;
-  }
-
-  /**
    * Auto-creates a delivery record when a delivery order becomes READY. It is
    * created AWAITING_DISPATCH — invisible to riders until the waiter presses
    * "Send for delivery", which moves it to PENDING on the Delivery board.
@@ -605,13 +745,31 @@ export class OrdersService {
       (sum, i) => sum + Number(i.unitPrice) * i.quantity,
       0,
     );
+
+    // Delivery fee comes from the selected region, resolved server-side so the
+    // counter can never under/over-charge it.
+    let deliveryFee = 0;
+    let deliveryRegionId: string | null = null;
+    let deliveryRegionName: string | null = null;
+    if (dto.isDelivery && dto.deliveryRegionId) {
+      const region = await this.deliveryRegionRepo.findOne({
+        where: { id: dto.deliveryRegionId },
+      });
+      if (!region || region.storeId !== actor.storeId) {
+        throw new NotFoundException('Delivery region not found for this store');
+      }
+      deliveryFee = Number(region.fee);
+      deliveryRegionId = region.id;
+      deliveryRegionName = region.name;
+    }
+
     const taxAmount = Number(dto.taxAmount ?? 0);
     const discountAmount = Number(dto.discountAmount ?? 0);
-    const total = subtotal + taxAmount - discountAmount;
+    const total = subtotal + taxAmount + deliveryFee - discountAmount;
 
     const saved = await this.dataSource.transaction(async (manager) => {
       const orderNumber = await this.nextOrderNumber(manager, actor.storeId!);
-      const estimatedPrepMinutes = await this.computeEstimatedPrepMinutes(
+      const estimatedPrepMinutes = await computeEstimatedPrepMinutes(
         manager,
         dto.items,
       );
@@ -637,6 +795,10 @@ export class OrdersService {
         total,
         paidAmount: 0,
         notes: dto.notes ?? null,
+        deliveryFee,
+        deliveryRegionId,
+        deliveryRegionName,
+        deliveryAddress: dto.deliveryAddress ?? null,
         items: dto.items.map((i) =>
           manager.create(OrderItemEntity, {
             productId: i.productId ?? null,
@@ -757,8 +919,8 @@ export class OrdersService {
       );
     }
 
-    if (filter.dateFrom) qb.andWhere('o.createdAt >= :df', { df: filter.dateFrom });
-    if (filter.dateTo) qb.andWhere('o.createdAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
+    if (filter.dateFrom) qb.andWhere('o.createdAt >= :df', { df: startOfDayFilter(filter.dateFrom) });
+    if (filter.dateTo) qb.andWhere('o.createdAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     const [data, total] = await qb.getManyAndCount();
     return paginate(data, total, page, limit, OrderResponseDto.from);
@@ -1408,30 +1570,17 @@ export class OrdersService {
     const allReady = reloaded.items.every((i) => i.prepStatus === 'ready');
     const anyPreparing = reloaded.items.some((i) => i.prepStatus === 'preparing');
 
+    // Route auto-transitions through updateStatus rather than saving the
+    // status column directly. Writing it here skipped every side effect the
+    // status change owns — most visibly ensureDeliveryForOrder, so ticking off
+    // items one by one in the KDS moved the order to READY but never created
+    // the delivery, and it never reached the Delivery board unless the
+    // order-level "Ready" button was used. Table release, the customer push,
+    // ingredient consumption and the preparing-staff stamp were skipped too.
     if (allReady && reloaded.status === OrderStatus.PREPARING) {
-      reloaded.status = OrderStatus.READY;
-      await this.orderRepo.save(reloaded);
-      await this.eventRepo.save(
-        this.eventRepo.create({
-          orderId: reloaded.id,
-          fromStatus: OrderStatus.PREPARING,
-          toStatus: OrderStatus.READY,
-          actorId: actor.sub,
-          actorType: actor.sub_type,
-        }),
-      );
+      await this.updateStatus(actor, orderId, { status: OrderStatus.READY });
     } else if (anyPreparing && reloaded.status === OrderStatus.PENDING) {
-      reloaded.status = OrderStatus.PREPARING;
-      await this.orderRepo.save(reloaded);
-      await this.eventRepo.save(
-        this.eventRepo.create({
-          orderId: reloaded.id,
-          fromStatus: OrderStatus.PENDING,
-          toStatus: OrderStatus.PREPARING,
-          actorId: actor.sub,
-          actorType: actor.sub_type,
-        }),
-      );
+      await this.updateStatus(actor, orderId, { status: OrderStatus.PREPARING });
     }
 
     this.activityLog.record({

@@ -44,7 +44,7 @@ export class WalletTransactionEntity {
   reference: string | null;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }
 
@@ -87,6 +87,6 @@ export class PointsTransactionEntity {
   orderId: string | null;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }

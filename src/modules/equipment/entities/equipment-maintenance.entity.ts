@@ -46,6 +46,6 @@ export class EquipmentMaintenanceEntity {
   description: string;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }

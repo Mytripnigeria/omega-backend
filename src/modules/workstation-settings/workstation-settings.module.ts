@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { WorkstationSettingsEntity } from './entities/workstation-settings.entity';
 import { StoreEntity } from '../store/entities/store.entity';
 import { BusinessSettingsEntity } from '../business/entities/business-settings.entity';
+import { TaxRateEntity } from '../tax-rates/entities/tax-rate.entity';
 import { WorkstationSettingsService } from './workstation-settings.service';
 import { WorkstationSettingsController } from './workstation-settings.controller';
 import {
@@ -17,6 +18,7 @@ import { ActivityLogModule } from '../activity-log/activity-log.module';
       WorkstationSettingsEntity,
       StoreEntity,
       BusinessSettingsEntity,
+      TaxRateEntity,
     ]),
     ActivityLogModule,
   ],

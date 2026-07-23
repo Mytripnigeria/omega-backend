@@ -22,6 +22,11 @@ import { CategoryEntity } from '../modules/categories/entities/category.entity';
         synchronize: config.get<boolean>('database.synchronize'),
         logging: config.get<boolean>('database.logging'),
         entities: [__dirname + '/../**/*.entity{.ts,.js}'],
+        // Align the DB session with the process timezone (src/timezone.ts) so
+        // DATE_TRUNC/date filters bucket into the merchant's days, not UTC's.
+        // Safe now that every timestamp column is timestamptz: the session zone
+        // only affects how absolute instants are rendered/truncated.
+        extra: { options: `-c timezone=${process.env.TZ || 'Africa/Lagos'}` },
         migrations: [__dirname + '/migrations/*{.ts,.js}'],
         migrationsRun: config.get<boolean>('database.migrationsRun'),
         autoLoadEntities: true,

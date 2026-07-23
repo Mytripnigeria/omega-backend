@@ -38,6 +38,7 @@ import { WorkstationSettingsModule } from './modules/workstation-settings/workst
 import { UsersModule } from './modules/users/users.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { InventoryLocationsModule } from './modules/inventory-locations/inventory-locations.module';
+import { DeliveryRegionsModule } from './modules/delivery-regions/delivery-regions.module';
 import { StockTransfersModule } from './modules/stock-transfers/stock-transfers.module';
 import { EquipmentModule } from './modules/equipment/equipment.module';
 import { TablesModule } from './modules/tables/tables.module';
@@ -114,6 +115,7 @@ import { PayoutsModule } from './modules/payouts/payouts.module';
     UsersModule,
     CustomersModule,
     InventoryLocationsModule,
+    DeliveryRegionsModule,
     StockTransfersModule,
     EquipmentModule,
     TablesModule,

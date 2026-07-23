@@ -26,6 +26,7 @@ import {
   paginate,
 } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { endOfDayFilter, startOfDayFilter } from '../../common/utils/date-range';
 
 interface ActorContext {
   sub: string;
@@ -205,29 +206,28 @@ export class CashSessionsService {
     });
   }
 
-  async close(
-    actor: ActorContext,
-    id: string,
-    dto: CloseCashSessionDto,
-  ): Promise<CashSessionResponseDto> {
-    const session = await this.findEntity(actor, id);
-    if (session.status !== 'open') {
-      throw new BadRequestException(
-        `Cannot close session that is already ${session.status}`,
-      );
-    }
-    if (actor.sub_type === 'staff' && session.staffId !== actor.sub) {
-      throw new ForbiddenException('You can only close your own cash session');
-    }
-
-    // ---------- Compute expected from the order ledger ----------
-    const closedAt = new Date();
-
+  /**
+   * Sums what the register *should* hold, per tender, from the order ledger:
+   * every payment taken between the session opening and `upTo` by the opener
+   * or any staff who joined. Extracted from close() so an OPEN session can be
+   * queried live — the workstation needs to show the cashier what's expected
+   * before they count the drawer.
+   */
+  async computeExpected(
+    session: CashSessionEntity,
+    upTo: Date = new Date(),
+  ): Promise<{
+    expectedCash: number;
+    expectedCard: number;
+    expectedMobile: number;
+    expectedTotal: number;
+  }> {
     // Sales rung up by the opener AND any staff who joined the register all
     // count toward this register's expected totals.
     const sessionStaffIds = Array.from(
       new Set([session.staffId, ...(session.staffIdsJoined ?? [])]),
     );
+    const closedAt = upTo;
 
     const cashRow = await this.orderRepo
       .createQueryBuilder('o')
@@ -272,15 +272,58 @@ export class CashSessionsService {
       .andWhere('o.paidAt <= :closedAt', { closedAt })
       .getRawOne<{ total: string }>();
 
+    // The float is part of the cash the drawer should physically hold.
     const expectedCash =
       Number(cashRow?.total ?? 0) + Number(session.openingFloat);
     const expectedCard = Number(cardRow?.total ?? 0);
     const expectedMobile = Number(mobileRow?.total ?? 0);
-    const expectedTotal = expectedCash + expectedCard + expectedMobile;
 
-    const actualCash = Number(dto.actualCash);
-    const actualCard = Number(dto.actualCard);
-    const actualMobile = Number(dto.actualMobile);
+    return {
+      expectedCash,
+      expectedCard,
+      expectedMobile,
+      expectedTotal: expectedCash + expectedCard + expectedMobile,
+    };
+  }
+
+  /** Live expected totals for a session the cashier is about to close. */
+  async getExpected(actor: ActorContext, id: string) {
+    const session = await this.findEntity(actor, id);
+    return this.computeExpected(session);
+  }
+
+  async close(
+    actor: ActorContext,
+    id: string,
+    dto: CloseCashSessionDto,
+  ): Promise<CashSessionResponseDto> {
+    const session = await this.findEntity(actor, id);
+    if (session.status !== 'open') {
+      throw new BadRequestException(
+        `Cannot close session that is already ${session.status}`,
+      );
+    }
+    if (actor.sub_type === 'staff' && session.staffId !== actor.sub) {
+      throw new ForbiddenException('You can only close your own cash session');
+    }
+
+    // ---------- Compute expected from the order ledger ----------
+    const closedAt = new Date();
+    const { expectedCash, expectedCard, expectedMobile, expectedTotal } =
+      await this.computeExpected(session, closedAt);
+
+    // The counted amounts are whatever the cashier actually has in hand. Any
+    // tender they didn't count falls back to the expected figure for that
+    // tender rather than 0 — a cashier only physically counts the drawer, and
+    // treating an uncounted card/transfer total as "0 collected" is what made
+    // every close report a huge shortage.
+    const counted = (v: number | undefined, fallback: number) =>
+      v === undefined || v === null || Number.isNaN(Number(v))
+        ? fallback
+        : Number(v);
+    const actualCash = counted(dto.actualCash, expectedCash);
+    const actualCard = counted(dto.actualCard, expectedCard);
+    const actualMobile = counted(dto.actualMobile, expectedMobile);
     const actualTotal = actualCash + actualCard + actualMobile;
 
     const difference = Math.round((actualTotal - expectedTotal) * 100) / 100;
@@ -382,9 +425,9 @@ export class CashSessionsService {
     if (filter.status) qb.andWhere('s.status = :status', { status: filter.status });
     if (filter.reconciliationStatus)
       qb.andWhere('s.reconciliationStatus = :rs', { rs: filter.reconciliationStatus });
-    if (filter.dateFrom) qb.andWhere('s.openedAt >= :df', { df: filter.dateFrom });
+    if (filter.dateFrom) qb.andWhere('s.openedAt >= :df', { df: startOfDayFilter(filter.dateFrom) });
     if (filter.dateTo)
-      qb.andWhere('s.openedAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
+      qb.andWhere('s.openedAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     const [data, total] = await qb.getManyAndCount();
     return paginate(data, total, page, limit, CashSessionResponseDto.from);
@@ -557,9 +600,9 @@ export class CashSessionsService {
       qb.andWhere('s.storeId = :scopedStore', { scopedStore: actor.storeId });
     }
     if (filter.storeId) qb.andWhere('s.storeId = :storeId', { storeId: filter.storeId });
-    if (filter.dateFrom) qb.andWhere('s.openedAt >= :df', { df: filter.dateFrom });
+    if (filter.dateFrom) qb.andWhere('s.openedAt >= :df', { df: startOfDayFilter(filter.dateFrom) });
     if (filter.dateTo)
-      qb.andWhere('s.openedAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
+      qb.andWhere('s.openedAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     const [openCount, closedCount, reviewedCount, balancedCount, shortCount, overCount] =
       await Promise.all([

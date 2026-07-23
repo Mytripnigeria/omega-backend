@@ -27,6 +27,7 @@ import {
   UpdateReferralSettingsDto,
 } from './dto/referral.dto';
 import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
+import { endOfDayFilter, startOfDayFilter } from '../../common/utils/date-range';
 
 @Injectable()
 export class ReferralsService {
@@ -280,9 +281,9 @@ export class ReferralsService {
       qb.andWhere('r.referrerCustomerId = :rid', {
         rid: filter.referrerCustomerId,
       });
-    if (filter.dateFrom) qb.andWhere('r.createdAt >= :df', { df: filter.dateFrom });
+    if (filter.dateFrom) qb.andWhere('r.createdAt >= :df', { df: startOfDayFilter(filter.dateFrom) });
     if (filter.dateTo)
-      qb.andWhere('r.createdAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
+      qb.andWhere('r.createdAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
     if (filter.search) {
       qb.andWhere('r.referralCode ILIKE :q', { q: `%${filter.search}%` });
     }

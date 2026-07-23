@@ -20,5 +20,6 @@ export const AppDataSource = new DataSource({
   synchronize: false,
   logging: process.env.DB_LOGGING === 'true',
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
+  extra: { options: `-c timezone=${process.env.TZ || 'Africa/Lagos'}` },
   migrations: [__dirname + '/migrations/*{.ts,.js}'],
 });

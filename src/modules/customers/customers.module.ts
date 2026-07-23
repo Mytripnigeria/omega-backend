@@ -11,6 +11,9 @@ import { CustomersService } from './customers.service';
 import { CustomersController } from './customers.controller';
 import { StorefrontCustomerController } from './storefront-customer.controller';
 import { ActivityLogModule } from '../activity-log/activity-log.module';
+import { WalletDepositService } from './wallet-deposit.service';
+import { PaystackModule } from '../paystack/paystack.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
 
 @Module({
   imports: [
@@ -22,9 +25,11 @@ import { ActivityLogModule } from '../activity-log/activity-log.module';
       LoyaltyTierEntity,
     ]),
     ActivityLogModule,
+    PaystackModule,
+    IntegrationsModule,
   ],
   controllers: [CustomersController, StorefrontCustomerController],
-  providers: [CustomersService],
+  providers: [CustomersService, WalletDepositService],
   exports: [CustomersService, TypeOrmModule],
 })
 export class CustomersModule {}

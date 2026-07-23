@@ -18,6 +18,7 @@ import {
   paginate,
 } from '../../common/dto/pagination.dto';
 import { OrderEntity, OrderStatus } from '../orders/entities/order.entity';
+import { endOfDayFilter, startOfDayFilter } from '../../common/utils/date-range';
 
 export interface RecordTransactionInput {
   businessId: string;
@@ -143,9 +144,9 @@ export class FinancialTransactionsService {
       );
     }
 
-    if (filter.dateFrom) qb.andWhere('t.createdAt >= :df', { df: filter.dateFrom });
+    if (filter.dateFrom) qb.andWhere('t.createdAt >= :df', { df: startOfDayFilter(filter.dateFrom) });
     if (filter.dateTo)
-      qb.andWhere('t.createdAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
+      qb.andWhere('t.createdAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     const [data, total] = await qb.getManyAndCount();
     return paginate(data, total, page, limit, FinancialTransactionResponseDto.from);
@@ -182,9 +183,9 @@ export class FinancialTransactionsService {
       baseQb.andWhere('(t.storeId = :storeId OR t.storeId IS NULL)', {
         storeId: filter.storeId,
       });
-    if (filter.dateFrom) baseQb.andWhere('t.createdAt >= :df', { df: filter.dateFrom });
+    if (filter.dateFrom) baseQb.andWhere('t.createdAt >= :df', { df: startOfDayFilter(filter.dateFrom) });
     if (filter.dateTo)
-      baseQb.andWhere('t.createdAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
+      baseQb.andWhere('t.createdAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     // Use parameter names that don't collide with the base query's `:dt`
     // (dateTo) / `:df` (dateFrom). Reusing `:dt` for the debit type overwrote

@@ -5,7 +5,7 @@ import {
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ProductEntity } from './product.entity';
 import { IngredientEntity } from '../../ingredients/entities/ingredient.entity';
 
@@ -18,6 +18,17 @@ export class ProductIngredientEntity {
   @ApiProperty({ format: 'uuid', example: 'pr1a2b3c-1234-4f1a-8c3e-9a4f0c4e2b21' })
   @Column()
   productId: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description:
+      'When set, this recipe line only applies to the named variation. ' +
+      'Rows with a null variationId are the product-level default recipe, ' +
+      'used only by products that have no variation-scoped recipe.',
+  })
+  @Column({ type: 'uuid', nullable: true })
+  variationId: string | null;
 
   @ApiProperty({ format: 'uuid', example: 'ing1a2b3-1234-4f1a-8c3e-9a4f0c4e2b21' })
   @Column()

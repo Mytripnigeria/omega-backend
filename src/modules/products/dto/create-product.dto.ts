@@ -48,6 +48,29 @@ export class CreateProductIngredientDto {
   @ApiProperty({ example: 'kg', description: 'Unit of measure matching the ingredient\'s unit' })
   @IsString()
   unit: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description:
+      'Scope this recipe line to a single variation. Omit (or null) for the ' +
+      'product-level default recipe, which is used by products that have no ' +
+      'variation-scoped recipe.',
+  })
+  @IsOptional()
+  @IsUUID()
+  variationId?: string | null;
+
+  @ApiPropertyOptional({
+    example: 'Large',
+    description:
+      'Alternative to variationId when creating a product and its variations ' +
+      'in the same request — matched (case-insensitively) against the ' +
+      'variation names in this payload.',
+  })
+  @IsOptional()
+  @IsString()
+  variationName?: string;
 }
 
 export class CreateProductDto {

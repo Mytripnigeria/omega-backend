@@ -75,11 +75,11 @@ export class ShiftEntity {
   status: ShiftStatus;
 
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true, description: 'Actual clock-in timestamp' })
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   actualClockIn: Date;
 
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true, description: 'Actual clock-out timestamp' })
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   actualClockOut: Date;
 
   @ApiPropertyOptional({ example: 'Cover for sick leave', nullable: true })
@@ -141,10 +141,10 @@ export class ShiftEntity {
   }> | null;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 }

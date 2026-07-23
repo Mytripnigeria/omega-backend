@@ -2,6 +2,39 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type, plainToInstance } from 'class-transformer';
 import { AddOnGroupEntity } from '../entities/addon-group.entity';
 import { AddOnEntity } from '../entities/addon.entity';
+import { AddonIngredientEntity } from '../entities/addon-ingredient.entity';
+
+export class AddOnIngredientResponseDto {
+  @ApiProperty({ format: 'uuid' })
+  @Expose()
+  id: string;
+
+  @ApiProperty({ format: 'uuid' })
+  @Expose()
+  ingredientId: string;
+
+  @ApiPropertyOptional({ nullable: true, example: 'Chicken' })
+  @Expose()
+  ingredientName: string | null;
+
+  @ApiProperty({ example: 0.25 })
+  @Expose()
+  quantity: number;
+
+  @ApiProperty({ example: 'kg' })
+  @Expose()
+  unit: string;
+
+  static from(entity: AddonIngredientEntity): AddOnIngredientResponseDto {
+    return {
+      id: entity.id,
+      ingredientId: entity.ingredientId,
+      ingredientName: entity.ingredient?.name ?? null,
+      quantity: Number(entity.quantity),
+      unit: entity.unit,
+    };
+  }
+}
 
 export class AddOnResponseDto {
   @ApiProperty({ format: 'uuid', example: 'ao1a2b3c-1234-4f1a-8c3e-9a4f0c4e2b21' })
@@ -24,6 +57,13 @@ export class AddOnResponseDto {
   @Expose()
   addOnGroupId: string;
 
+  @ApiProperty({
+    type: () => [AddOnIngredientResponseDto],
+    description: 'Stock links consumed when this add-on is ordered',
+  })
+  @Expose()
+  ingredients: AddOnIngredientResponseDto[];
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)
@@ -35,9 +75,17 @@ export class AddOnResponseDto {
   updatedAt: Date;
 
   static from(entity: AddOnEntity): AddOnResponseDto {
-    return plainToInstance(AddOnResponseDto, entity, {
-      excludeExtraneousValues: true,
-    });
+    return plainToInstance(
+      AddOnResponseDto,
+      {
+        ...entity,
+        price: Number(entity.price),
+        ingredients: (entity.addonIngredients ?? []).map(
+          AddOnIngredientResponseDto.from,
+        ),
+      },
+      { excludeExtraneousValues: true },
+    );
   }
 }
 
@@ -82,9 +130,18 @@ export class AddOnGroupResponseDto {
   updatedAt: Date;
 
   static from(entity: AddOnGroupEntity): AddOnGroupResponseDto {
-    return plainToInstance(AddOnGroupResponseDto, entity, {
-      excludeExtraneousValues: true,
-    });
+    return plainToInstance(
+      AddOnGroupResponseDto,
+      {
+        ...entity,
+        // Map nested add-ons through their own mapper: class-transformer's
+        // @Type() only reshapes the plain object, it never calls
+        // AddOnResponseDto.from, so the addonIngredients -> ingredients
+        // rename would be silently dropped.
+        addons: (entity.addons ?? []).map(AddOnResponseDto.from),
+      },
+      { excludeExtraneousValues: true },
+    );
   }
 
   static fromMany(entities: AddOnGroupEntity[]): AddOnGroupResponseDto[] {

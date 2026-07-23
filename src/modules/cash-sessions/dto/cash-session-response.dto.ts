@@ -93,7 +93,15 @@ export class CashSessionResponseDto {
   @Expose()
   actualTotal: number;
 
-  @ApiProperty()
+  @ApiProperty({
+    description:
+      "Total counted at close (cash + card + transfer) — the register's closing " +
+      'amount. Alias of actualTotal, exposed under the name the register views use.',
+  })
+  @Expose()
+  closingAmount: number;
+
+  @ApiProperty({ description: 'actualTotal − expectedTotal. Negative = short.' })
   @Expose()
   difference: number;
 
@@ -141,6 +149,7 @@ export class CashSessionResponseDto {
         actualCard: Number(entity.actualCard),
         actualMobile: Number(entity.actualMobile),
         actualTotal: Number(entity.actualTotal),
+        closingAmount: Number(entity.actualTotal),
         difference: Number(entity.difference),
       },
       { excludeExtraneousValues: true },

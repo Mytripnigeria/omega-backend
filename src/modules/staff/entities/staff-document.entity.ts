@@ -44,6 +44,6 @@ export class StaffDocumentEntity {
   url: string;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   uploadedAt: Date;
 }

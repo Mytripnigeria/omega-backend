@@ -2,6 +2,20 @@ import { IsString, IsOptional, IsBoolean, IsNumber, IsArray, ValidateNested } fr
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
+export class CreateAddOnIngredientDto {
+  @ApiProperty({ example: 'ing1a2b3-1234-4f1a-8c3e-9a4f0c4e2b21', description: 'IngredientEntity ID' })
+  @IsString()
+  ingredientId: string;
+
+  @ApiProperty({ example: 0.25, description: 'Quantity consumed each time this add-on is selected' })
+  @IsNumber()
+  quantity: number;
+
+  @ApiProperty({ example: 'kg', description: 'Unit of measure matching the ingredient unit' })
+  @IsString()
+  unit: string;
+}
+
 export class CreateAddOnDto {
   @ApiProperty({ example: 'Extra Chicken', description: 'Addon display name' })
   @IsString()
@@ -16,6 +30,19 @@ export class CreateAddOnDto {
   @IsOptional()
   @IsBoolean()
   isAvailable?: boolean;
+
+  @ApiPropertyOptional({
+    type: () => [CreateAddOnIngredientDto],
+    description:
+      'Stock links for this add-on. Selecting the add-on on an order deducts ' +
+      'these ingredients, so "Extra Chicken" actually consumes chicken. ' +
+      'Sending the array replaces this add-on whole recipe.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateAddOnIngredientDto)
+  ingredients?: CreateAddOnIngredientDto[];
 }
 
 export class CreateAddOnGroupDto {

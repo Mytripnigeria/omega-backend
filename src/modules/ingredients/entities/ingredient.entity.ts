@@ -72,7 +72,7 @@ export class IngredientEntity {
   storeId: string;
 
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true, description: 'When stock was last replenished' })
-  @Column({ nullable: true, type: 'timestamp' })
+  @Column({ nullable: true, type: 'timestamptz' })
   lastRestocked!: Date | null;
 
   @ApiPropertyOptional({
@@ -84,14 +84,14 @@ export class IngredientEntity {
   expiryDate: string | null;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
-  @DeleteDateColumn()
+  @DeleteDateColumn({ type: 'timestamptz' })
   deletedAt: Date;
 }

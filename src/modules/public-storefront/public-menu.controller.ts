@@ -17,6 +17,8 @@ import { ComboResponseDto } from '../combos/dto/combo-response.dto';
 import { StoreEntity } from '../store/entities/store.entity';
 import { StoreResponseDto } from '../store/dto/store-response.dto';
 import { OrderItemEntity } from '../orders/entities/order-item.entity';
+import { DeliveryRegionEntity } from '../delivery-regions/entities/delivery-region.entity';
+import { DeliveryRegionResponseDto } from '../delivery-regions/dto/delivery-region.dto';
 
 @ApiTags('public-storefront')
 @Controller('public/storefront')
@@ -32,7 +34,25 @@ export class PublicMenuController {
     private readonly storeRepo: Repository<StoreEntity>,
     @InjectRepository(OrderItemEntity)
     private readonly orderItemRepo: Repository<OrderItemEntity>,
+    @InjectRepository(DeliveryRegionEntity)
+    private readonly deliveryRegionRepo: Repository<DeliveryRegionEntity>,
   ) {}
+
+  @ApiOperation({
+    summary: 'Delivery regions for a store',
+    description:
+      'Active delivery regions and their fees, so checkout can make the customer ' +
+      'pick one and show the real delivery fee before paying.',
+  })
+  @ApiParam({ name: 'storeId', format: 'uuid' })
+  @Get('stores/:storeId/delivery-regions')
+  async deliveryRegions(@Param('storeId') storeId: string) {
+    const rows = await this.deliveryRegionRepo.find({
+      where: { storeId, isActive: true },
+      order: { sortOrder: 'ASC', name: 'ASC' },
+    });
+    return rows.map(DeliveryRegionResponseDto.from);
+  }
 
   @ApiOperation({
     summary: 'Store availability',

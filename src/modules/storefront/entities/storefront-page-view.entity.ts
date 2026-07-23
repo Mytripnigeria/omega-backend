@@ -32,6 +32,6 @@ export class StorefrontPageViewEntity {
   userAgent: string | null;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }
