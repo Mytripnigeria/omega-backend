@@ -127,14 +127,14 @@ export class EventEntity {
   notes: string | null;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
-  @DeleteDateColumn()
+  @DeleteDateColumn({ type: 'timestamptz' })
   deletedAt: Date | null;
 }

@@ -20,6 +20,7 @@ import {
   PaginatedResponseDto,
   paginate,
 } from '../../common/dto/pagination.dto';
+import { endOfDayFilter, startOfDayFilter } from '../../common/utils/date-range';
 
 interface MovementInput {
   businessId: string;
@@ -70,9 +71,9 @@ export class MerchantWalletService {
     if (filter.linkedId)
       qb.andWhere('t.linkedId = :linkedId', { linkedId: filter.linkedId });
     if (filter.dateFrom)
-      qb.andWhere('t.createdAt >= :df', { df: filter.dateFrom });
+      qb.andWhere('t.createdAt >= :df', { df: startOfDayFilter(filter.dateFrom) });
     if (filter.dateTo)
-      qb.andWhere('t.createdAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
+      qb.andWhere('t.createdAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     const [rows, total] = await qb.getManyAndCount();
     return paginate(

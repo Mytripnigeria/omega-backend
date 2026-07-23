@@ -55,6 +55,6 @@ export class ChecklistCompletionEntity {
   completedAt: Date;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }

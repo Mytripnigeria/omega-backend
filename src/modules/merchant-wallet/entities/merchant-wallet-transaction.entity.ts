@@ -93,6 +93,6 @@ export class MerchantWalletTransactionEntity {
   storeId: string | null;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }

@@ -7,6 +7,7 @@ import { WorkstationSettingsResponseDto } from './dto/workstation-settings-respo
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { StoreEntity } from '../store/entities/store.entity';
 import { BusinessSettingsEntity } from '../business/entities/business-settings.entity';
+import { TaxRateEntity } from '../tax-rates/entities/tax-rate.entity';
 
 @Injectable()
 export class WorkstationSettingsService {
@@ -17,6 +18,8 @@ export class WorkstationSettingsService {
     private readonly storeRepo: Repository<StoreEntity>,
     @InjectRepository(BusinessSettingsEntity)
     private readonly businessSettingsRepo: Repository<BusinessSettingsEntity>,
+    @InjectRepository(TaxRateEntity)
+    private readonly taxRateRepo: Repository<TaxRateEntity>,
     private readonly activityLog: ActivityLogService,
   ) {}
 
@@ -32,6 +35,17 @@ export class WorkstationSettingsService {
     const settings = await this.businessSettingsRepo.findOne({
       where: { businessId },
     });
+    // The POS used to hardcode 7.5% VAT. Tax is a business-profile setting, so
+    // ship it with the receipt info (the only staff-readable settings endpoint)
+    // and let the counter price from it. A configured default tax rate takes
+    // precedence over the legacy business-settings fraction.
+    const defaultTaxRate = await this.taxRateRepo.findOne({
+      where: { businessId, isActive: true, isDefault: true },
+    });
+    const taxRate = defaultTaxRate
+      ? Number(defaultTaxRate.ratePercent) / 100
+      : Number(settings?.taxRate ?? 0);
+
     return {
       storeName: store?.name ?? null,
       address: store?.address ?? null,
@@ -39,6 +53,11 @@ export class WorkstationSettingsService {
       receiptHeader: settings?.receiptHeader ?? null,
       receiptFooter: settings?.receiptFooter ?? null,
       showServerName: settings?.receiptShowServerName ?? false,
+      // Fraction, e.g. 0.075 — matches how the storefront prices tax.
+      taxRate,
+      taxLabel: defaultTaxRate?.name ?? 'VAT',
+      taxInclusive: defaultTaxRate?.isInclusive ?? false,
+      showTaxBreakdown: settings?.receiptShowTaxBreakdown ?? true,
     };
   }
 

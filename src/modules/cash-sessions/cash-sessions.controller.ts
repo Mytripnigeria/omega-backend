@@ -137,6 +137,19 @@ export class CashSessionsController {
   }
 
   @ApiOperation({
+    summary: 'Live expected totals for a session',
+    description:
+      'What the register should hold right now, per tender, computed from the ' +
+      'order ledger. The workstation shows these while the cashier counts the ' +
+      'drawer, so the closing amounts they submit are real counted figures.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @Get(':id/expected')
+  expected(@Req() req: AuthedRequest, @Param('id') id: string) {
+    return this.service.getExpected(actorFrom(req), id);
+  }
+
+  @ApiOperation({
     summary: 'Download the Register Report (PDF)',
     description: 'Streams a PDF register report matching the printed sample.',
   })

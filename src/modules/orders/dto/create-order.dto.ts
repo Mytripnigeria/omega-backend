@@ -56,6 +56,13 @@ export class CreateOrderItemDto {
   })
   @IsOptional()
   @IsArray()
+  // @Type is required, not decorative: the global ValidationPipe runs with
+  // enableImplicitConversion, and without an explicit element type
+  // class-transformer reflects `Record<string, unknown>[]` as Array and
+  // converts every add-on object into an empty array — silently dropping the
+  // whole add-on selection from the order (and from receipts and stock
+  // deduction along with it).
+  @Type(() => Object)
   addons?: Record<string, unknown>[];
 
   @ApiPropertyOptional()
@@ -112,6 +119,27 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Delivery region for a counter-taken delivery order. Its fee is applied ' +
+      'server-side to deliveryFee — the POS never sets the price itself.',
+  })
+  @IsOptional()
+  @IsUUID()
+  deliveryRegionId?: string;
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'Delivery address captured at the counter, e.g. { line1, city, state }. ' +
+      'Snapshotted onto the order so the rider sees a real address.',
+  })
+  @IsOptional()
+  @IsObject()
+  deliveryAddress?: Record<string, unknown>;
 
   @ApiPropertyOptional({ example: 0 })
   @IsOptional()

@@ -5,6 +5,7 @@ import { ActivityLogEntity, ActorType } from './entities/activity-log.entity';
 import { ActivityLogResponseDto } from './dto/activity-log-response.dto';
 import { ActivityLogFilterDto } from './dto/activity-log-filter.dto';
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
+import { endOfDayFilter, startOfDayFilter } from '../../common/utils/date-range';
 
 export interface RecordActivityInput {
   actorType: ActorType;
@@ -82,8 +83,8 @@ export class ActivityLogService {
       }
     }
 
-    if (filter.dateFrom) qb.andWhere('a.createdAt >= :df', { df: filter.dateFrom });
-    if (filter.dateTo) qb.andWhere('a.createdAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
+    if (filter.dateFrom) qb.andWhere('a.createdAt >= :df', { df: startOfDayFilter(filter.dateFrom) });
+    if (filter.dateTo) qb.andWhere('a.createdAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     // Staff scoping: visible if entry targets their store OR was authored by them.
     if (scope?.storeId && scope?.actorId) {

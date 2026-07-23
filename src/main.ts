@@ -1,3 +1,7 @@
+// MUST stay the first import: pins the process timezone to the merchant's
+// wall clock before any other module is evaluated. See src/timezone.ts.
+import './timezone';
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';

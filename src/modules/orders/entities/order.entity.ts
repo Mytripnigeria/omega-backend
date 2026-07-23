@@ -232,6 +232,31 @@ export class OrderEntity {
   @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
   deliveryFee: number;
 
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description: 'Delivery region the order is going to — the source of deliveryFee.',
+  })
+  @Column({ type: 'uuid', nullable: true })
+  deliveryRegionId: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Lekki Phase 1',
+    description: 'Snapshot of the region name, so renaming a region never rewrites history.',
+  })
+  @Column({ type: 'varchar', nullable: true })
+  deliveryRegionName: string | null;
+
+  @ApiProperty({
+    example: 0,
+    description:
+      'Naira value of the loyalty points redeemed on this order. Broken out of ' +
+      'discountAmount so the payment view can show what points actually paid for.',
+  })
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
+  pointsValue: number;
+
   @ApiPropertyOptional({ example: 500, nullable: true })
   @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
   tipAmount: number;
@@ -287,14 +312,14 @@ export class OrderEntity {
   items: OrderItemEntity[];
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
-  @DeleteDateColumn()
+  @DeleteDateColumn({ type: 'timestamptz' })
   deletedAt: Date;
 }

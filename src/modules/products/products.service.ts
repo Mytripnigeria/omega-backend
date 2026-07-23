@@ -6,7 +6,11 @@ import { ProductVariationEntity } from './entities/product-variation.entity';
 import { ProductIngredientEntity } from './entities/product-ingredient.entity';
 import { AddOnGroupEntity } from '../addon-groups/entities/addon-group.entity';
 import { CategoryEntity } from '../categories/entities/category.entity';
-import { CreateProductDto, CreateVariationDto } from './dto/create-product.dto';
+import {
+  CreateProductDto,
+  CreateProductIngredientDto,
+  CreateVariationDto,
+} from './dto/create-product.dto';
 import { UpdateProductDto, UpdateVariationDto, ToggleProductStatusDto } from './dto/update-product.dto';
 import { FilterProductDto } from './dto/filter-product.dto';
 import { LinkIngredientDto } from './dto/link-ingredient.dto';
@@ -87,6 +91,44 @@ export class ProductsService {
     }
   }
 
+  /**
+   * Rewrites a product's whole recipe to exactly the rows given, resolving
+   * each row's variation scope. A row may name its variation instead of
+   * carrying its id (the create flow, where variations get their ids only on
+   * save); an unmatched name degrades to the product-level default rather
+   * than being dropped. Replace-all semantics also fix the duplicate rows the
+   * old per-link endpoint could leave behind, which double-deducted stock.
+   */
+  private async replaceIngredients(
+    productId: string,
+    ingredients: CreateProductIngredientDto[],
+  ): Promise<void> {
+    await this.productIngredientRepo.delete({ productId });
+    if (!ingredients.length) return;
+
+    const variations = await this.variationRepo.find({ where: { productId } });
+    const byName = new Map(
+      variations.map((v) => [v.name.trim().toLowerCase(), v.id]),
+    );
+    const validIds = new Set(variations.map((v) => v.id));
+
+    const rows = ingredients.map((i) => {
+      const { variationId, variationName, ...rest } = i;
+      let scope: string | null = null;
+      if (variationId && validIds.has(variationId)) {
+        scope = variationId;
+      } else if (variationName) {
+        scope = byName.get(variationName.trim().toLowerCase()) ?? null;
+      }
+      return this.productIngredientRepo.create({
+        ...rest,
+        productId,
+        variationId: scope,
+      } as Partial<ProductIngredientEntity>);
+    });
+    await this.productIngredientRepo.save(rows);
+  }
+
   async create(dto: CreateProductDto): Promise<ProductResponseDto> {
     const { variations, ingredients, addonGroupIds, imageFileId, imageUrl, ...productData } = dto;
     const product = this.productRepo.create(productData);
@@ -96,12 +138,6 @@ export class ProductsService {
       product.variations = variations.map((v) => this.variationRepo.create(v));
     }
 
-    if (ingredients?.length) {
-      product.productIngredients = ingredients.map((i) =>
-        this.productIngredientRepo.create(i),
-      );
-    }
-
     if (addonGroupIds?.length) {
       product.addonGroups = await this.addonGroupRepo.findBy({
         id: In(addonGroupIds),
@@ -109,6 +145,12 @@ export class ProductsService {
     }
 
     const saved = await this.productRepo.save(product);
+
+    // After save, so variation-scoped recipe lines can bind to real ids.
+    if (ingredients?.length) {
+      await this.replaceIngredients(saved.id, ingredients);
+    }
+
     return this.findOne(saved.id);
   }
 
@@ -186,10 +228,27 @@ export class ProductsService {
 
   async update(id: string, dto: UpdateProductDto): Promise<ProductResponseDto> {
     const product = await this.findEntity(id);
-    const { imageFileId, imageUrl, ...rest } = dto;
+    const { imageFileId, imageUrl, ingredients, addonGroupIds, ...rest } = dto;
     Object.assign(product, rest);
     await this.resolveImageFields(product, { imageFileId, imageUrl });
+
+    if (addonGroupIds !== undefined) {
+      product.addonGroups = addonGroupIds.length
+        ? await this.addonGroupRepo.findBy({ id: In(addonGroupIds) })
+        : [];
+    }
+
+    // Hide the recipe collection from the cascade entirely: replaceIngredients
+    // owns those rows. Leaving the loaded set attached would re-insert the
+    // stale recipe after we replace it, and emptying the array makes TypeORM
+    // orphan the rows by nulling their (NOT NULL) productId.
+    delete (product as Partial<ProductEntity>).productIngredients;
     await this.productRepo.save(product);
+
+    if (ingredients !== undefined) {
+      await this.replaceIngredients(id, ingredients);
+    }
+
     return this.findOne(id);
   }
 

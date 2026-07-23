@@ -30,6 +30,7 @@ import { PaystackService } from '../paystack/paystack.service';
 import { IntegrationsService } from '../integrations/integrations.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
+import { endOfDayFilter, startOfDayFilter } from '../../common/utils/date-range';
 
 export const PAYOUTS_QUEUE = 'payouts';
 
@@ -204,9 +205,9 @@ export class PayoutsService {
       .take(limit);
     if (filter.status) qb.andWhere('p.status = :status', { status: filter.status });
     if (filter.dateFrom)
-      qb.andWhere('p.createdAt >= :df', { df: filter.dateFrom });
+      qb.andWhere('p.createdAt >= :df', { df: startOfDayFilter(filter.dateFrom) });
     if (filter.dateTo)
-      qb.andWhere('p.createdAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
+      qb.andWhere('p.createdAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     const [rows, total] = await qb.getManyAndCount();
     // Fetch related bank accounts in one query.

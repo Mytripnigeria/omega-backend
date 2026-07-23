@@ -65,6 +65,13 @@ export class StorefrontOrderItemDto {
   })
   @IsOptional()
   @IsArray()
+  // @Type is required, not decorative: the global ValidationPipe runs with
+  // enableImplicitConversion, and without an explicit element type
+  // class-transformer reflects `Record<string, unknown>[]` as Array and
+  // converts every add-on object into an empty array — silently dropping the
+  // whole add-on selection from the order (and from receipts and stock
+  // deduction along with it).
+  @Type(() => Object)
   addons?: Record<string, unknown>[];
 
   @ApiPropertyOptional()
@@ -104,6 +111,16 @@ export class StorefrontCreateOrderDto {
   @IsOptional()
   @IsObject()
   deliveryAddress?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Delivery region the order goes to. Required when the store has any ' +
+      'active region configured — its fee is what gets charged.',
+  })
+  @IsOptional()
+  @IsUUID()
+  deliveryRegionId?: string;
 
   @ApiPropertyOptional({ description: 'ISO 8601 scheduled time; null = ASAP' })
   @IsOptional()

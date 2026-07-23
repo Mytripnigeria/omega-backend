@@ -3,12 +3,14 @@ import {
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
+  OneToMany,
   JoinColumn,
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { ApiProperty } from '@nestjs/swagger';
 import { AddOnGroupEntity } from './addon-group.entity';
+import { AddonIngredientEntity } from './addon-ingredient.entity';
 
 @Entity('addons')
 export class AddOnEntity {
@@ -36,11 +38,14 @@ export class AddOnEntity {
   @JoinColumn({ name: 'addOnGroupId' })
   addOnGroup: AddOnGroupEntity;
 
+  @OneToMany(() => AddonIngredientEntity, (ai) => ai.addOn, { cascade: true })
+  addonIngredients: AddonIngredientEntity[];
+
   @ApiProperty({ type: String, format: 'date-time' })
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 }

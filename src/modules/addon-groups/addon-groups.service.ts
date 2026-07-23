@@ -3,7 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like, FindOptionsWhere } from 'typeorm';
 import { AddOnGroupEntity } from './entities/addon-group.entity';
 import { AddOnEntity } from './entities/addon.entity';
-import { CreateAddOnGroupDto, CreateAddOnDto } from './dto/create-addon-group.dto';
+import { AddonIngredientEntity } from './entities/addon-ingredient.entity';
+import {
+  CreateAddOnGroupDto,
+  CreateAddOnDto,
+  CreateAddOnIngredientDto,
+} from './dto/create-addon-group.dto';
 import { UpdateAddOnGroupDto, UpdateAddOnDto } from './dto/update-addon-group.dto';
 import { FilterAddOnGroupDto } from './dto/filter-addon-group.dto';
 import {
@@ -19,17 +24,47 @@ export class AddOnGroupsService {
     private readonly groupRepo: Repository<AddOnGroupEntity>,
     @InjectRepository(AddOnEntity)
     private readonly addonRepo: Repository<AddOnEntity>,
+    @InjectRepository(AddonIngredientEntity)
+    private readonly addonIngredientRepo: Repository<AddonIngredientEntity>,
   ) {}
+
+  /**
+   * Replaces an add-on's stock links with exactly the rows given. Replace-all
+   * (rather than append) keeps the recipe editable from a single form and
+   * avoids duplicate rows silently double-deducting on every order.
+   */
+  private async replaceAddonIngredients(
+    addOnId: string,
+    ingredients: CreateAddOnIngredientDto[],
+  ): Promise<void> {
+    await this.addonIngredientRepo.delete({ addOnId });
+    if (!ingredients.length) return;
+    await this.addonIngredientRepo.save(
+      ingredients.map((i) => this.addonIngredientRepo.create({ ...i, addOnId })),
+    );
+  }
 
   async create(businessId: string, dto: CreateAddOnGroupDto): Promise<AddOnGroupResponseDto> {
     const { addons, ...groupData } = dto;
     this.validateSelection(groupData.minSelection, groupData.maxSelection, addons?.length ?? 0);
     const group = this.groupRepo.create({ ...groupData, businessId });
     if (addons?.length) {
-      group.addons = addons.map((a) => this.addonRepo.create(a));
+      group.addons = addons.map(({ ingredients: _ing, ...a }) =>
+        this.addonRepo.create(a),
+      );
     }
     const saved = await this.groupRepo.save(group);
-    return AddOnGroupResponseDto.from(saved);
+
+    // Bind each add-on's recipe once its id exists.
+    for (let i = 0; i < (addons?.length ?? 0); i++) {
+      const recipe = addons![i].ingredients;
+      const persistedAddon = saved.addons?.[i];
+      if (recipe && persistedAddon) {
+        await this.replaceAddonIngredients(persistedAddon.id, recipe);
+      }
+    }
+
+    return AddOnGroupResponseDto.from(await this.findEntity(businessId, saved.id));
   }
 
   async findAll(
@@ -43,7 +78,7 @@ export class AddOnGroupsService {
 
     const [data, total] = await this.groupRepo.findAndCount({
       where,
-      relations: ['addons'],
+      relations: ['addons', 'addons.addonIngredients'],
       order: { name: 'ASC' },
       skip: (page - 1) * limit,
       take: limit,
@@ -59,7 +94,7 @@ export class AddOnGroupsService {
   private async findEntity(businessId: string, id: string): Promise<AddOnGroupEntity> {
     const group = await this.groupRepo.findOne({
       where: { id, businessId },
-      relations: ['addons'],
+      relations: ['addons', 'addons.addonIngredients'],
     });
     if (!group) throw new NotFoundException(`Add-on group ${id} not found`);
     return group;
@@ -98,9 +133,11 @@ export class AddOnGroupsService {
 
   async addAddon(businessId: string, groupId: string, dto: CreateAddOnDto): Promise<AddOnResponseDto> {
     await this.findEntity(businessId, groupId);
-    const addon = this.addonRepo.create({ ...dto, addOnGroupId: groupId });
+    const { ingredients, ...addonData } = dto;
+    const addon = this.addonRepo.create({ ...addonData, addOnGroupId: groupId });
     const saved = await this.addonRepo.save(addon);
-    return AddOnResponseDto.from(saved);
+    if (ingredients) await this.replaceAddonIngredients(saved.id, ingredients);
+    return AddOnResponseDto.from(await this.findAddon(groupId, saved.id));
   }
 
   async updateAddon(
@@ -111,9 +148,17 @@ export class AddOnGroupsService {
   ): Promise<AddOnResponseDto> {
     await this.findEntity(businessId, groupId);
     const addon = await this.findAddon(groupId, addonId);
-    Object.assign(addon, dto);
-    const saved = await this.addonRepo.save(addon);
-    return AddOnResponseDto.from(saved);
+    const { ingredients, ...addonData } = dto;
+    Object.assign(addon, addonData);
+    // Hide the recipe collection from the cascade — replaceAddonIngredients
+    // owns those rows. An emptied array would make TypeORM orphan them by
+    // nulling their NOT NULL addOnId.
+    delete (addon as Partial<AddOnEntity>).addonIngredients;
+    await this.addonRepo.save(addon);
+    if (ingredients !== undefined) {
+      await this.replaceAddonIngredients(addonId, ingredients);
+    }
+    return AddOnResponseDto.from(await this.findAddon(groupId, addonId));
   }
 
   async removeAddon(businessId: string, groupId: string, addonId: string): Promise<void> {
@@ -137,6 +182,7 @@ export class AddOnGroupsService {
   private async findAddon(groupId: string, addonId: string): Promise<AddOnEntity> {
     const addon = await this.addonRepo.findOne({
       where: { id: addonId, addOnGroupId: groupId },
+      relations: ['addonIngredients', 'addonIngredients.ingredient'],
     });
     if (!addon) throw new NotFoundException(`Add-on ${addonId} not found in group ${groupId}`);
     return addon;

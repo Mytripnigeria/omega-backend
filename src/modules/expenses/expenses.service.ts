@@ -20,6 +20,7 @@ import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto'
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { StorageService } from '../storage/storage.service';
 import { FinancialTransactionsService } from '../financial-transactions/financial-transactions.service';
+import { endOfDayFilter, startOfDayFilter } from '../../common/utils/date-range';
 
 interface ActorContext {
   sub: string;
@@ -120,8 +121,8 @@ export class ExpensesService {
       );
     }
 
-    if (filter.dateFrom) qb.andWhere('e.createdAt >= :df', { df: filter.dateFrom });
-    if (filter.dateTo) qb.andWhere('e.createdAt <= :dt', { dt: `${filter.dateTo} 23:59:59` });
+    if (filter.dateFrom) qb.andWhere('e.createdAt >= :df', { df: startOfDayFilter(filter.dateFrom) });
+    if (filter.dateTo) qb.andWhere('e.createdAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     const [data, total] = await qb.getManyAndCount();
     return paginate(data, total, page, limit, ExpenseResponseDto.from);

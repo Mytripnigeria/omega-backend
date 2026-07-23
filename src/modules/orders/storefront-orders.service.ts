@@ -45,6 +45,8 @@ import { FinancialTransactionsService } from '../financial-transactions/financia
 import { TransactionMethod } from '../financial-transactions/entities/financial-transaction.entity';
 import { UserJwtPayload } from '../../common/types/jwt-payload.types';
 import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
+import { DeliveryRegionEntity } from '../delivery-regions/entities/delivery-region.entity';
+import { computeEstimatedPrepMinutes } from './prep-time.util';
 
 export interface PlaceOrderResult {
   order: OrderResponseDto;
@@ -105,6 +107,8 @@ export class StorefrontOrdersService {
     private readonly comboRepo: Repository<ComboEntity>,
     @InjectRepository(WorkstationSettingsEntity)
     private readonly workstationSettingsRepo: Repository<WorkstationSettingsEntity>,
+    @InjectRepository(DeliveryRegionEntity)
+    private readonly deliveryRegionRepo: Repository<DeliveryRegionEntity>,
     private readonly dataSource: DataSource,
     private readonly customersService: CustomersService,
     private readonly couponsService: CouponsService,
@@ -246,9 +250,10 @@ export class StorefrontOrdersService {
     const nairaPerPoint = Number(loyaltySettings.nairaPerPoint ?? 0);
 
     const tipAmount = Number(dto.tipAmount ?? 0);
-    const deliveryFee = dto.isDelivery
-      ? this.computeDeliveryFee(subtotal, store)
-      : 0;
+    const resolvedDelivery = dto.isDelivery
+      ? await this.resolveDeliveryFee(subtotal, store, dto.deliveryRegionId)
+      : { fee: 0, regionId: null, regionName: null };
+    const deliveryFee = resolvedDelivery.fee;
     const taxAmount =
       Math.round((subtotal + deliveryFee) * taxRate * 100) / 100;
 
@@ -337,6 +342,13 @@ export class StorefrontOrdersService {
       const initialStatus = statusChain[statusChain.length - 1];
 
       const orderNumber = await this.nextOrderNumber(mgr, dto.storeId);
+      // Same rule as the counter: an order takes as long as its slowest item.
+      // Website orders used to reach the kitchen with no prep time at all, so
+      // the board fell back to a flat 15 minutes for every one of them.
+      const estimatedPrepMinutes = await computeEstimatedPrepMinutes(
+        mgr,
+        lines,
+      );
       const order = mgr.create(OrderEntity, {
         orderNumber,
         businessId: user.businessId,
@@ -350,14 +362,18 @@ export class StorefrontOrdersService {
         channel: 'website',
         isDelivery: dto.isDelivery,
         status: initialStatus,
+        estimatedPrepMinutes,
         subtotal,
         taxAmount,
         discountAmount: couponDiscount + pointsValue,
         total,
         paidAmount: 0,
         pointsRedeemed: pointsToRedeem,
+        pointsValue,
         notes: dto.notes ?? null,
         deliveryFee,
+        deliveryRegionId: resolvedDelivery.regionId,
+        deliveryRegionName: resolvedDelivery.regionName,
         tipAmount,
         couponCode,
         couponId,
@@ -715,9 +731,47 @@ export class StorefrontOrdersService {
     await this.orderRepo.update(orderId, { paymentStatus: 'failed' });
   }
 
-  private computeDeliveryFee(_subtotal: number, store: StoreEntity): number {
-    // Flat per-store fee — admins set this on the store edit form.
-    return Number(store.deliveryFee ?? 0);
+  /**
+   * The delivery fee is the fee of the region the customer selected. The flat
+   * `store.deliveryFee` is only a fallback for stores that haven't configured
+   * any region yet — a region, once picked, always wins (client spec: "Delivery
+   * Region should be selected if order is for delivery, that's what sets the
+   * delivery fee, not automatic 1k"). Resolving server-side keeps the fee
+   * tamper-proof: the client's number is never trusted.
+   */
+  private async resolveDeliveryFee(
+    subtotal: number,
+    store: StoreEntity,
+    regionId: string | null | undefined,
+  ): Promise<{ fee: number; regionId: string | null; regionName: string | null }> {
+    if (!regionId) {
+      const configured = await this.deliveryRegionRepo.count({
+        where: { storeId: store.id, isActive: true },
+      });
+      if (configured > 0) {
+        throw new BadRequestException(
+          'Please select a delivery region for this order.',
+        );
+      }
+      return { fee: Number(store.deliveryFee ?? 0), regionId: null, regionName: null };
+    }
+
+    const region = await this.deliveryRegionRepo.findOne({
+      where: { id: regionId },
+    });
+    if (!region || region.storeId !== store.id || !region.isActive) {
+      throw new BadRequestException('Selected delivery region is unavailable.');
+    }
+    if (subtotal < Number(region.minOrderAmount)) {
+      throw new BadRequestException(
+        `Minimum order for ${region.name} is ${Number(region.minOrderAmount)}.`,
+      );
+    }
+    return {
+      fee: Number(region.fee),
+      regionId: region.id,
+      regionName: region.name,
+    };
   }
 
   private emailFor(customer: CustomerEntity): string {

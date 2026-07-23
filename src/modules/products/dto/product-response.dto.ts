@@ -82,6 +82,16 @@ export class ProductIngredientResponseDto {
   @Expose()
   ingredientId: string;
 
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description:
+      'Variation this recipe line belongs to; null = the product-level default ' +
+      'recipe, used only by products with no variation-scoped recipe.',
+  })
+  @Expose()
+  variationId: string | null;
+
   @ApiProperty({ example: 0.25 })
   @Expose()
   quantity: number;

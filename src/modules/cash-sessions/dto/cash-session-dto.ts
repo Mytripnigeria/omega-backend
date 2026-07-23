@@ -33,20 +33,26 @@ export class OpenCashSessionDto {
 }
 
 export class CloseCashSessionDto {
-  @ApiProperty({ example: 12500 })
+  // All three are optional: a cashier physically counts the drawer (cash) and
+  // often leaves card/transfer to reconcile against the ledger. An omitted
+  // tender is treated as "matches expected", not as "nothing collected".
+  @ApiPropertyOptional({ example: 12500, description: 'Cash counted in the drawer, including the opening float' })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  actualCash: number;
+  actualCash?: number;
 
-  @ApiProperty({ example: 8000 })
+  @ApiPropertyOptional({ example: 8000, description: 'Card/POS terminal total counted' })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  actualCard: number;
+  actualCard?: number;
 
-  @ApiProperty({ example: 0 })
+  @ApiPropertyOptional({ example: 0, description: 'Transfer/wallet total counted' })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  actualMobile: number;
+  actualMobile?: number;
 
   @ApiPropertyOptional()
   @IsOptional()

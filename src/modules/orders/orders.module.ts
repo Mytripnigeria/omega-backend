@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OrderEntity } from './entities/order.entity';
+import { DeliveryRegionEntity } from '../delivery-regions/entities/delivery-region.entity';
+import { ComboItemEntity } from '../combos/entities/combo-item.entity';
+import { AddonIngredientEntity } from '../addon-groups/entities/addon-ingredient.entity';
 import { OrderItemEntity } from './entities/order-item.entity';
 import { OrderStatusEventEntity } from './entities/order-status-event.entity';
 import { StoreEntity } from '../store/entities/store.entity';
@@ -60,6 +63,9 @@ import { DeliveryEntity } from '../deliveries/entities/delivery.entity';
       IngredientEntity,
       IngredientMovementEntity,
       IngredientLocationStockEntity,
+      DeliveryRegionEntity,
+      ComboItemEntity,
+      AddonIngredientEntity,
     ]),
     ActivityLogModule,
     CustomersModule,

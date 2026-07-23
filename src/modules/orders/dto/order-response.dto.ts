@@ -154,6 +154,15 @@ export class OrderResponseDto {
   @Expose()
   pointsRedeemed: number;
 
+  @ApiProperty({
+    example: 0,
+    description:
+      'Naira value of the redeemed points — the portion of discountAmount that ' +
+      'loyalty points paid for.',
+  })
+  @Expose()
+  pointsValue: number;
+
   @ApiPropertyOptional({ format: 'uuid', nullable: true })
   @Expose()
   paymentMethodId: string | null;
@@ -181,6 +190,14 @@ export class OrderResponseDto {
   @ApiProperty({ example: 0 })
   @Expose()
   deliveryFee: number;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @Expose()
+  deliveryRegionId: string | null;
+
+  @ApiPropertyOptional({ nullable: true, example: 'Lekki Phase 1' })
+  @Expose()
+  deliveryRegionName: string | null;
 
   @ApiProperty({ example: 0 })
   @Expose()
@@ -273,6 +290,7 @@ export class OrderResponseDto {
         paidAmount: Number(entity.paidAmount),
         refundedAmount: Number(entity.refundedAmount ?? 0),
         deliveryFee: Number(entity.deliveryFee ?? 0),
+        pointsValue: Number(entity.pointsValue ?? 0),
         tipAmount: Number(entity.tipAmount ?? 0),
         couponDiscount: Number(entity.couponDiscount ?? 0),
         items: (entity.items ?? []).map((i) => ({
