@@ -61,6 +61,7 @@ import { ReferralsModule } from './modules/referrals/referrals.module';
 import { MerchantWalletModule } from './modules/merchant-wallet/merchant-wallet.module';
 import { PayoutsModule } from './modules/payouts/payouts.module';
 import { DashboardPermissionsInterceptor } from './common/interceptors/dashboard-permissions.interceptor';
+import { ChowdeckModule } from './modules/chowdeck/chowdeck.module';
 
 @Module({
   imports: [
@@ -109,6 +110,7 @@ import { DashboardPermissionsInterceptor } from './common/interceptors/dashboard
     NotificationPreferencesModule,
     ActivityLogModule,
     OrdersModule,
+    ChowdeckModule,
     DeliveriesModule,
     ExpensesModule,
     ReportsModule,

@@ -118,6 +118,16 @@ export class OrderResponseDto {
   @Expose()
   channel: OrderChannel;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'CHW-8Q2K1',
+    description:
+      "The originating marketplace's own order reference, shown so staff can " +
+      'quote it back to Chowdeck support.',
+  })
+  @Expose()
+  externalReference: string | null;
+
   @ApiProperty({ example: false })
   @Expose()
   isDelivery: boolean;

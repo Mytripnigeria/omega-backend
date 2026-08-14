@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
@@ -40,6 +42,7 @@ import { TransactionMethod } from '../financial-transactions/entities/financial-
 import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.service';
 import { TableEntity, TableStatus } from '../tables/entities/table.entity';
 import { PushService } from '../push-notifications/push.service';
+import { ChowdeckService } from '../chowdeck/chowdeck.service';
 import { ProductIngredientEntity } from '../products/entities/product-ingredient.entity';
 import { ProductVariationEntity } from '../products/entities/product-variation.entity';
 import { ComboItemEntity } from '../combos/entities/combo-item.entity';
@@ -156,6 +159,10 @@ export class OrdersService {
     private readonly integrations: IntegrationsService,
     private readonly merchantWallet: MerchantWalletService,
     private readonly pushService: PushService,
+    // forwardRef: ChowdeckModule creates orders through this service, so the
+    // two modules reference each other.
+    @Inject(forwardRef(() => ChowdeckService))
+    private readonly chowdeck: ChowdeckService,
   ) {}
 
   /**
@@ -1201,6 +1208,10 @@ export class OrdersService {
     // Best-effort customer push on every status change.
     await this.sendOrderStatusPush(order, dto.status);
 
+    // Marketplace orders carry their status back to the marketplace. Fire and
+    // forget: Chowdeck being slow or down must not stall the POS.
+    await this.pushExternalStatus(order, fromStatus, dto.status, null);
+
     this.activityLog.record({
       actorType: actor.sub_type,
       actorId: actor.sub,
@@ -1214,6 +1225,36 @@ export class OrdersService {
     });
 
     return this.findOne(actor, order.id);
+  }
+
+  /**
+   * Relays a status change to the marketplace the order came from.
+   *
+   * Only marketplace orders (those carrying an `externalReference`) do
+   * anything. Deliberately swallows every failure: an outage at Chowdeck must
+   * never surface as a failed status change in the POS, and the attempt is
+   * logged inside the integration for replay.
+   */
+  private async pushExternalStatus(
+    order: OrderEntity,
+    fromStatus: OrderStatus | null,
+    toStatus: OrderStatus,
+    reason: string | null,
+  ): Promise<void> {
+    if (!order.externalReference || order.channel !== 'chowdeck') return;
+    try {
+      await this.chowdeck.pushStatus({
+        storeId: order.storeId,
+        externalReference: order.externalReference,
+        fromStatus,
+        toStatus,
+        reason,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Chowdeck status push failed for order ${order.orderNumber}: ${(err as Error).message}`,
+      );
+    }
   }
 
   async cancel(
@@ -1264,6 +1305,15 @@ export class OrdersService {
     await this.releaseTableIfAttached(order.tableId);
 
     await this.sendOrderStatusPush(order, OrderStatus.CANCELLED);
+
+    // Tell the marketplace we can't fulfil it — their reject endpoint requires
+    // a reason, so pass the one staff gave.
+    await this.pushExternalStatus(
+      order,
+      fromStatus,
+      OrderStatus.CANCELLED,
+      dto.reason ?? null,
+    );
 
     this.activityLog.record({
       actorType: actor.sub_type,

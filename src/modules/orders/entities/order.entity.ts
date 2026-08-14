@@ -32,7 +32,7 @@ export enum OrderStatus {
   CANCELLED = 'cancelled',
 }
 
-export type OrderChannel = 'pos' | 'website' | 'phone';
+export type OrderChannel = 'pos' | 'website' | 'phone' | 'chowdeck';
 
 @Entity('orders')
 @Unique(['storeId', 'orderNumber'])
@@ -95,9 +95,29 @@ export class OrderEntity {
   @Column({ type: 'varchar', nullable: true })
   tableNumber: string | null;
 
-  @ApiProperty({ enum: ['pos', 'website', 'phone'], example: 'pos' })
-  @Column({ type: 'enum', enum: ['pos', 'website', 'phone'], default: 'pos' })
+  @ApiProperty({
+    enum: ['pos', 'website', 'phone', 'chowdeck'],
+    example: 'pos',
+    description: '`chowdeck` marks an order that arrived from the Chowdeck marketplace.',
+  })
+  @Column({
+    type: 'enum',
+    enum: ['pos', 'website', 'phone', 'chowdeck'],
+    default: 'pos',
+  })
   channel: OrderChannel;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'testing119312',
+    description:
+      "The originating marketplace's own order reference (Chowdeck). Unique " +
+      'per order and used to push status changes back to them, and to make ' +
+      'webhook ingestion idempotent.',
+  })
+  @Column({ type: 'varchar', nullable: true, unique: true })
+  @Index()
+  externalReference: string | null;
 
   @ApiProperty({ example: false, description: 'Order is for delivery (vs dine-in/takeout)' })
   @Column({ default: false })

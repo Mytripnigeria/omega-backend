@@ -72,10 +72,10 @@ export class CreateOrderItemDto {
 }
 
 export class CreateOrderDto {
-  @ApiProperty({ example: 'pos', enum: ['pos', 'website', 'phone'] })
+  @ApiProperty({ example: 'pos', enum: ['pos', 'website', 'phone', 'chowdeck'] })
   @IsOptional()
-  @IsEnum(['pos', 'website', 'phone'])
-  channel?: 'pos' | 'website' | 'phone';
+  @IsEnum(['pos', 'website', 'phone', 'chowdeck'])
+  channel?: 'pos' | 'website' | 'phone' | 'chowdeck';
 
   @ApiPropertyOptional({ example: false })
   @IsOptional()

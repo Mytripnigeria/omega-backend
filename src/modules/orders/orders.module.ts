@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OrderEntity } from './entities/order.entity';
 import { DeliveryRegionEntity } from '../delivery-regions/entities/delivery-region.entity';
@@ -40,9 +40,11 @@ import { IngredientMovementEntity } from '../ingredients/entities/ingredient-mov
 import { IngredientLocationStockEntity } from '../ingredients/entities/ingredient-location-stock.entity';
 import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
 import { DeliveryEntity } from '../deliveries/entities/delivery.entity';
+import { ChowdeckModule } from '../chowdeck/chowdeck.module';
 
 @Module({
   imports: [
+    forwardRef(() => ChowdeckModule),
     TypeOrmModule.forFeature([
       OrderEntity,
       OrderItemEntity,

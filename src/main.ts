@@ -3,7 +3,7 @@
 import './timezone';
 
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { NestExpressApplication } from '@nestjs/platform-express';
@@ -50,7 +50,16 @@ async function bootstrap() {
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   });
 
-  app.setGlobalPrefix('api');
+  // Marketplace webhooks are excluded from the /api prefix: the URLs already
+  // registered with Chowdeck are of the form
+  // https://app.omega.com.ng/webhook/chowdeck[/{token}], and a third party
+  // can't be asked to change them.
+  app.setGlobalPrefix('api', {
+    exclude: [
+      { path: 'webhook/chowdeck', method: RequestMethod.POST },
+      { path: 'webhook/chowdeck/:token', method: RequestMethod.POST },
+    ],
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({
