@@ -3,6 +3,17 @@ export interface AdminJwtPayload {
   sub_type: 'admin';
   email: string;
   businessId: string;
+  /**
+   * Stores this dashboard login may work in. Absent/null means the whole
+   * business (the owner); a staff member granted dashboard access is normally
+   * restricted to the store(s) they work at.
+   */
+  storeIds?: string[] | null;
+  /**
+   * Dashboard module permissions. Absent/null means unrestricted (the owner);
+   * a staff-granted login carries an explicit list.
+   */
+  permissions?: string[] | null;
   sessionId?: string;
 }
 

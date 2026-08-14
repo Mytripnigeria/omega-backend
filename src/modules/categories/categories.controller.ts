@@ -106,8 +106,9 @@ export class CategoriesController {
   getStats(
     @BusinessContext() businessId: string,
     @Query('type') type?: CategoryType,
+    @Query('storeId') storeId?: string,
   ) {
-    return this.categoriesService.getStats(businessId, type);
+    return this.categoriesService.getStats(businessId, type, storeId);
   }
 
   @ApiOperation({

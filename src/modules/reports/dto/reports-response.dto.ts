@@ -394,6 +394,70 @@ export class TopProductsReportDto {
   rows: TopProductRowDto[];
 }
 
+export class ProductPerformanceRowDto {
+  @ApiProperty({ example: 'Chicken Shawarma' })
+  name: string;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Big',
+    description: 'Variation name (variation rows only).',
+  })
+  variationName: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  productId: string | null;
+
+  @ApiProperty({ example: 148, description: 'Units sold in the period' })
+  unitsSold: number;
+
+  @ApiProperty({ example: 96, description: 'Distinct orders containing it' })
+  ordersCount: number;
+
+  @ApiProperty({ example: 372000, description: 'Revenue attributed in the period' })
+  revenue: number;
+}
+
+/**
+ * In-depth "how is every item performing" breakdown: each product (combos
+ * included), each variation of a product, and each add-on — so a merchant can
+ * see that "Big" outsells "Small" or that an add-on nobody buys is dead weight.
+ */
+export class ProductPerformanceDto {
+  @ApiProperty({ type: [ProductPerformanceRowDto], description: 'Products and combos' })
+  products: ProductPerformanceRowDto[];
+
+  @ApiProperty({ type: [ProductPerformanceRowDto], description: 'Per-variation rows' })
+  variations: ProductPerformanceRowDto[];
+
+  @ApiProperty({ type: [ProductPerformanceRowDto], description: 'Per-add-on rows' })
+  addons: ProductPerformanceRowDto[];
+
+  @ApiProperty({ example: 1240, description: 'Total units across all products' })
+  totalUnits: number;
+
+  @ApiProperty({ example: 3100000, description: 'Total revenue across all products' })
+  totalRevenue: number;
+}
+
+export class ProductPopularityRowDto {
+  @ApiProperty({ format: 'uuid' })
+  productId: string;
+
+  @ApiProperty({ example: 148, description: 'Units sold in the window' })
+  unitsSold: number;
+}
+
+/**
+ * Compact popularity ranking used to order the POS menu grid so the items a
+ * store actually sells surface first. Deliberately id + count only: the POS
+ * already holds the product catalogue and just needs the sort order.
+ */
+export class ProductPopularityDto {
+  @ApiProperty({ type: [ProductPopularityRowDto] })
+  rows: ProductPopularityRowDto[];
+}
+
 export type StockStatus = 'good' | 'low' | 'critical' | 'out';
 
 export class StockReportRowDto {

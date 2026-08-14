@@ -101,9 +101,15 @@ export class AddOnGroupsService {
     return group;
   }
 
-  async getStats(businessId: string) {
+  /**
+   * Add-on groups are store-scoped, so the summary cards must be too: counting
+   * the whole business next to a per-store list is what made add-ons look
+   * business-affiliated. Omitting `storeId` still totals the business, which is
+   * what the hub's "all stores" mode wants.
+   */
+  async getStats(businessId: string, storeId?: string) {
     const groups = await this.groupRepo.find({
-      where: { businessId },
+      where: storeId ? { businessId, storeId } : { businessId },
       relations: ['addons'],
     });
     const totalAddons = groups.reduce((sum, g) => sum + (g.addons?.length ?? 0), 0);

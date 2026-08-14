@@ -4,6 +4,7 @@ import { StaffEntity } from './entities/staff.entity';
 import { StaffDocumentEntity } from './entities/staff-document.entity';
 import { StoreEntity } from '../store/entities/store.entity';
 import { BusinessSettingsEntity } from '../business/entities/business-settings.entity';
+import { AdminEntity } from '../admin/entities/admin.entity';
 import { StaffService } from './staff.service';
 import { StaffController } from './staff.controller';
 import { StaffPreferencesController } from './staff-preferences.controller';
@@ -15,6 +16,7 @@ import { StaffPreferencesController } from './staff-preferences.controller';
       StaffDocumentEntity,
       StoreEntity,
       BusinessSettingsEntity,
+      AdminEntity,
     ]),
   ],
   // Preferences controller is registered first so /staff/me/preferences resolves

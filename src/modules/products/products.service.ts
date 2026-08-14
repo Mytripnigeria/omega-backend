@@ -11,7 +11,12 @@ import {
   CreateProductIngredientDto,
   CreateVariationDto,
 } from './dto/create-product.dto';
-import { UpdateProductDto, UpdateVariationDto, ToggleProductStatusDto } from './dto/update-product.dto';
+import {
+  UpdateProductDto,
+  UpdateVariationDto,
+  SyncVariationsDto,
+  ToggleProductStatusDto,
+} from './dto/update-product.dto';
 import { FilterProductDto } from './dto/filter-product.dto';
 import { LinkIngredientDto } from './dto/link-ingredient.dto';
 import {
@@ -269,6 +274,50 @@ export class ProductsService {
     const variation = this.variationRepo.create({ ...dto, productId });
     const saved = await this.variationRepo.save(variation);
     return ProductVariationResponseDto.from(saved);
+  }
+
+  /**
+   * Makes a product's variations exactly match the supplied set, in one
+   * transaction: rows carrying an `id` are updated in place, rows without one
+   * are inserted, and existing rows absent from the list are removed.
+   *
+   * Updating in place matters — deleting and recreating would cascade away each
+   * variation's ingredient recipe (`product_ingredients.variationId` is ON
+   * DELETE CASCADE), silently wiping the merchant's per-variant stock links.
+   */
+  async syncVariations(
+    productId: string,
+    dto: SyncVariationsDto,
+  ): Promise<ProductVariationResponseDto[]> {
+    await this.findEntity(productId);
+
+    return this.productRepo.manager.transaction(async (m) => {
+      const repo = m.getRepository(ProductVariationEntity);
+      const existing = await repo.find({ where: { productId } });
+      const existingById = new Map(existing.map((v) => [v.id, v]));
+
+      const keptIds = new Set<string>();
+      const result: ProductVariationEntity[] = [];
+
+      for (const row of dto.variations) {
+        const { id, ...fields } = row;
+        const current = id ? existingById.get(id) : undefined;
+        if (current) {
+          Object.assign(current, fields);
+          result.push(await repo.save(current));
+          keptIds.add(current.id);
+        } else {
+          // An unknown id is treated as a new variation rather than an error:
+          // the form may be re-saving against a variation deleted elsewhere.
+          result.push(await repo.save(repo.create({ ...fields, productId })));
+        }
+      }
+
+      const removed = existing.filter((v) => !keptIds.has(v.id));
+      if (removed.length > 0) await repo.remove(removed);
+
+      return result.map(ProductVariationResponseDto.from);
+    });
   }
 
   async updateVariation(

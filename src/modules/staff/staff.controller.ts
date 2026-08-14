@@ -25,7 +25,16 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { StaffService } from './staff.service';
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { UpdateStaffDto } from './dto/update-staff.dto';
+import { BusinessId } from '../../common/decorators/business-id.decorator';
+import {
+  DASHBOARD_MODULES,
+  DASHBOARD_PERMISSIONS,
+} from '../../common/permissions/dashboard-permissions';
 import { SetPinDto } from './dto/set-pin.dto';
+import {
+  DashboardAccessCredentialsDto,
+  GrantDashboardAccessDto,
+} from './dto/dashboard-access.dto';
 import { AddDocumentDto } from './dto/add-document.dto';
 import { StaffFilterDto } from './dto/staff-filter.dto';
 import {
@@ -87,6 +96,29 @@ export class StaffController {
     return this.staffService.findAll(filter);
   }
 
+  @ApiOperation({
+    summary: 'List dashboard permission modules',
+    description:
+      'The module catalogue the hub renders when granting a staff member ' +
+      'dashboard access. Each module offers `.view` and `.manage`; `manage` ' +
+      'implies `view`.',
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        modules: [{ key: 'orders', label: 'Orders' }],
+        permissions: ['all', 'orders.view', 'orders.manage'],
+      },
+    },
+  })
+  @Get('dashboard-permissions')
+  listDashboardPermissions() {
+    return {
+      modules: DASHBOARD_MODULES,
+      permissions: DASHBOARD_PERMISSIONS,
+    };
+  }
+
   @ApiOperation({ summary: 'Get a single staff member' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: StaffResponseDto })
@@ -122,6 +154,56 @@ export class StaffController {
   @HttpCode(HttpStatus.NO_CONTENT)
   setPin(@Param('id') id: string, @Body() dto: SetPinDto) {
     return this.staffService.setPin(id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Grant merchant-dashboard access',
+    description:
+      'Admin-only. Creates (or re-issues) a dashboard login for this staff ' +
+      'member and returns a generated temporary password **once** — it is ' +
+      'stored only as a hash and can never be read back, so copy it now. The ' +
+      'staff member must change it on first login. Defaults the store scope ' +
+      "to the staff member's own store.",
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiCreatedResponse({ type: DashboardAccessCredentialsDto })
+  @Post(':id/dashboard-access')
+  grantDashboardAccess(
+    @BusinessId() businessId: string,
+    @Param('id') id: string,
+    @Body() dto: GrantDashboardAccessDto,
+  ) {
+    return this.staffService.grantDashboardAccess(businessId, id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Get merchant-dashboard access state',
+    description: 'Admin-only. Never returns the password.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @Get(':id/dashboard-access')
+  getDashboardAccess(
+    @BusinessId() businessId: string,
+    @Param('id') id: string,
+  ) {
+    return this.staffService.getDashboardAccess(businessId, id);
+  }
+
+  @ApiOperation({
+    summary: 'Revoke merchant-dashboard access',
+    description:
+      "Admin-only. Removes the dashboard login. The staff member's " +
+      'workstation PIN is unaffected.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiNoContentResponse()
+  @Delete(':id/dashboard-access')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  revokeDashboardAccess(
+    @BusinessId() businessId: string,
+    @Param('id') id: string,
+  ) {
+    return this.staffService.revokeDashboardAccess(businessId, id);
   }
 
   @ApiOperation({ summary: 'Clear staff PIN', description: 'Admin-only. Removes the PIN so the staff member cannot log in.' })

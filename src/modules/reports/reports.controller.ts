@@ -36,6 +36,8 @@ import {
   StaffPerformanceDto,
   StockReportDto,
   TopProductsReportDto,
+  ProductPopularityDto,
+  ProductPerformanceDto,
   WasteReportDto,
 } from './dto/reports-response.dto';
 
@@ -140,6 +142,36 @@ export class ReportsController {
       'Best-selling products by revenue inside the date range. Joins order_items to ' +
       'orders to capture units, distinct orders, and revenue per product.',
   })
+  @ApiOperation({
+    summary: 'Product performance',
+    description:
+      'In-depth per-item sales for the date range: every product/combo, every ' +
+      'variation, and every add-on, ranked by revenue.',
+  })
+  @ApiOkResponse({ type: ProductPerformanceDto })
+  @Get('product-performance')
+  productPerformance(
+    @Req() req: AuthedRequest,
+    @Query() filter: ReportsRangeDto,
+  ) {
+    return this.service.getProductPerformance(actorFrom(req), filter);
+  }
+
+  @ApiOperation({
+    summary: 'Product popularity',
+    description:
+      'Units sold per product, most-ordered first, over the date range ' +
+      '(default: last 30 days). Drives the POS menu ordering.',
+  })
+  @ApiOkResponse({ type: ProductPopularityDto })
+  @Get('product-popularity')
+  productPopularity(
+    @Req() req: AuthedRequest,
+    @Query() filter: ReportsRangeDto,
+  ) {
+    return this.service.getProductPopularity(actorFrom(req), filter);
+  }
+
   @ApiOkResponse({ type: TopProductsReportDto })
   @Get('top-products')
   topProducts(

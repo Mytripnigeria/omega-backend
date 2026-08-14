@@ -150,7 +150,17 @@ export class ShiftsService implements OnModuleInit {
   async update(id: string, dto: UpdateShiftDto): Promise<ShiftResponseDto> {
     const shift = await this.shiftRepo.findOne({ where: { id } });
     if (!shift) throw new NotFoundException('Shift not found');
+
+    // Reassigning the shift to a different staff member without naming a role
+    // should carry that person's own role across, exactly as create() does —
+    // otherwise the shift keeps the previous holder's role.
+    const reassigned = !!dto.staffId && dto.staffId !== shift.staffId;
     Object.assign(shift, dto);
+    if (reassigned && !dto.roleId) {
+      const staff = await this.staffRepo.findOne({ where: { id: dto.staffId } });
+      shift.roleId = staff?.roleId ?? shift.roleId;
+    }
+
     await this.shiftRepo.save(shift);
     return this.findOne(id);
   }

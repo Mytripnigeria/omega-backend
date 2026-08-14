@@ -111,6 +111,23 @@ export class StorefrontOrdersController {
     return this.storefrontOrders.verifyPayment(user, id, dto.reference);
   }
 
+  @ApiOperation({
+    summary: 'Abandon an unpaid order',
+    description:
+      'Called by the storefront when the customer cancels or dismisses the ' +
+      'payment popup. Voids the never-charged order and reverses whatever the ' +
+      'placement reserved (wallet, points, coupon), so an uncharged order is ' +
+      'never left pending for the kitchen. No-op on an order that is already ' +
+      'paid or already cancelled.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiOkResponse({ type: OrderResponseDto })
+  @Post(':id/abandon-payment')
+  abandonPayment(@Req() req: Request, @Param('id') id: string) {
+    const user = req.user as UserJwtPayload;
+    return this.storefrontOrders.abandonPayment(user, id);
+  }
+
   @ApiOperation({ summary: 'Get one of my orders' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @Get(':id')

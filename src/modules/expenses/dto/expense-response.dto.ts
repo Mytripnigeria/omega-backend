@@ -3,6 +3,7 @@ import { Expose, Type, plainToInstance } from 'class-transformer';
 import {
   ExpenseCategory,
   ExpenseEntity,
+  ExpenseItem,
   ExpenseStatus,
 } from '../entities/expense.entity';
 
@@ -41,7 +42,20 @@ export class ExpenseResponseDto {
 
   @ApiProperty()
   @Expose()
-  description: string;
+  description: string | null;
+
+  @ApiPropertyOptional({
+    type: 'array',
+    items: { type: 'object', additionalProperties: true },
+    nullable: true,
+    description: 'Line items making up this submission.',
+  })
+  @Expose()
+  items: ExpenseItem[] | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @Expose()
+  supplierName: string | null;
 
   @ApiPropertyOptional({ format: 'uuid', nullable: true })
   @Expose()

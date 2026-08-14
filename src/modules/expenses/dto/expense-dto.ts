@@ -1,5 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  ArrayMinSize,
+  IsArray,
   IsDateString,
   IsEnum,
   IsNumber,
@@ -7,28 +10,97 @@ import {
   IsString,
   IsUUID,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
-import { ExpenseCategory, ExpenseStatus } from '../entities/expense.entity';
+import {
+  ExpenseCategory,
+  ExpenseItemType,
+  ExpenseStatus,
+} from '../entities/expense.entity';
+
+export class ExpenseItemDto {
+  @ApiProperty({ example: 'Gas cylinder' })
+  @IsString()
+  name: string;
+
+  @ApiProperty({
+    enum: ExpenseItemType,
+    example: ExpenseItemType.PURCHASE,
+    description: '`purchase` = stock bought in; `expense` = money spent.',
+  })
+  @IsEnum(ExpenseItemType)
+  type: ExpenseItemType;
+
+  @ApiPropertyOptional({ example: 'kg', nullable: true })
+  @IsOptional()
+  @IsString()
+  unit?: string | null;
+
+  @ApiProperty({ example: 2 })
+  @IsNumber()
+  @Min(0)
+  quantity: number;
+
+  @ApiProperty({ example: 6250 })
+  @IsNumber()
+  @Min(0)
+  unitPrice: number;
+
+  @ApiPropertyOptional({
+    example: 'Kunle Gas Ltd',
+    nullable: true,
+    description: 'Supplier for this line; falls back to the submission supplier.',
+  })
+  @IsOptional()
+  @IsString()
+  supplier?: string | null;
+}
 
 export class CreateExpenseDto {
+  /**
+   * Line items making up the submission. When supplied, `amount` is computed
+   * from them server-side (quantity × unitPrice, summed) so the stored total
+   * can never disagree with the lines it's made of.
+   */
+  @ApiPropertyOptional({ type: [ExpenseItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => ExpenseItemDto)
+  items?: ExpenseItemDto[];
+
+  @ApiPropertyOptional({ example: 'Kunle Gas Ltd' })
+  @IsOptional()
+  @IsString()
+  supplierName?: string;
+
   @ApiProperty({ enum: ExpenseCategory, example: ExpenseCategory.SUPPLIES })
   @IsEnum(ExpenseCategory)
   category: ExpenseCategory;
 
-  @ApiProperty({ example: 12500 })
+  @ApiPropertyOptional({
+    example: 12500,
+    description: 'Ignored when `items` are supplied — the total is summed from them.',
+  })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  amount: number;
+  amount?: number;
 
   @ApiPropertyOptional({ example: 'NGN', description: 'ISO 4217 currency code; defaults to business currency' })
   @IsOptional()
   @IsString()
   currency?: string;
 
-  @ApiProperty({ example: 'Replacement gas cylinder for kitchen' })
+  @ApiPropertyOptional({
+    example: 'Replacement gas cylinder for kitchen',
+    description: 'Optional once `items` are supplied.',
+  })
+  @IsOptional()
   @IsString()
-  description: string;
+  description?: string;
 
   @ApiPropertyOptional({ format: 'uuid', description: 'FileEntity ID for an uploaded receipt' })
   @IsOptional()
@@ -57,6 +129,19 @@ export class UpdateExpenseDto {
   @IsOptional()
   @IsUUID()
   receiptFileId?: string;
+
+  @ApiPropertyOptional({ type: [ExpenseItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => ExpenseItemDto)
+  items?: ExpenseItemDto[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  supplierName?: string;
 }
 
 export class ReviewExpenseDto {

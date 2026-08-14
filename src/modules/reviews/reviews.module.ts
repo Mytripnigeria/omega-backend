@@ -9,10 +9,13 @@ import {
   PublicReviewsController,
   StorefrontOrderReviewController,
 } from './reviews.controller';
+import { StorageModule } from '../storage/storage.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([OrderReviewEntity, OrderEntity, CustomerEntity]),
+    // Review photos are uploaded server-side from the customer's data URLs.
+    StorageModule,
   ],
   controllers: [
     AdminReviewsController,

@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type, plainToInstance } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsInt,
   IsOptional,
@@ -24,6 +26,22 @@ export class CreateOrderReviewDto {
   @IsString()
   @MaxLength(1000)
   comment?: string;
+
+  /**
+   * Photos attached to the review, as `data:image/...;base64,...` URLs — that
+   * is what the storefront's picker produces, and it keeps customers off the
+   * admin-only file-upload API. The server decodes and stores them.
+   */
+  @ApiPropertyOptional({
+    type: [String],
+    maxItems: 4,
+    description: 'Up to 4 photos as base64 data URLs.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @IsString({ each: true })
+  images?: string[];
 }
 
 export class UpdateOrderReviewModerationDto {
@@ -93,6 +111,14 @@ export class OrderReviewResponseDto {
   @ApiProperty()
   @Expose()
   isPublished: boolean;
+
+  @ApiPropertyOptional({
+    type: [String],
+    nullable: true,
+    description: 'Photos the customer attached to this review.',
+  })
+  @Expose()
+  imageUrls: string[] | null;
 
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()

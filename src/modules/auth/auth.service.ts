@@ -193,6 +193,10 @@ export class AuthService {
         role: savedAdmin.role,
         avatarUrl: savedAdmin.avatarUrl,
         twoFactorEnabled: savedAdmin.twoFactorEnabled,
+        // The hub renders its sidebar from these, so the login response must
+        // carry them — not just /auth/admin/me on a later refresh.
+        permissions: savedAdmin.permissions ?? null,
+        storeIds: savedAdmin.storeIds ?? null,
       },
     };
   }
@@ -209,6 +213,10 @@ export class AuthService {
       sub_type: 'admin',
       email: admin.email,
       businessId: admin.businessId,
+      // Carried on the token so every store-scoped query can honour the
+      // restriction without another lookup.
+      storeIds: admin.storeIds ?? null,
+      permissions: admin.permissions ?? null,
     };
 
     const accessToken = this.jwtService.sign(payload, {
@@ -248,6 +256,10 @@ export class AuthService {
         role: admin.role,
         avatarUrl: admin.avatarUrl,
         twoFactorEnabled: admin.twoFactorEnabled,
+        // The hub renders its sidebar from these, so the login response must
+        // carry them — not just /auth/admin/me on a later refresh.
+        permissions: admin.permissions ?? null,
+        storeIds: admin.storeIds ?? null,
       },
     };
   }
@@ -262,6 +274,9 @@ export class AuthService {
       role: admin.role,
       avatarUrl: admin.avatarUrl,
       twoFactorEnabled: admin.twoFactorEnabled,
+      // Drives which modules the hub renders. Null = unrestricted owner.
+      permissions: admin.permissions ?? null,
+      storeIds: admin.storeIds ?? null,
     };
   }
 
@@ -286,6 +301,10 @@ export class AuthService {
       sub_type: 'admin',
       email: admin.email,
       businessId: admin.businessId,
+      // Carried on the token so every store-scoped query can honour the
+      // restriction without another lookup.
+      storeIds: admin.storeIds ?? null,
+      permissions: admin.permissions ?? null,
     };
 
     const accessToken = this.jwtService.sign(newPayload, {

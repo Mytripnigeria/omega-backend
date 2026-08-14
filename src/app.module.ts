@@ -5,7 +5,7 @@ import {
 } from '@nestjs/config';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bullmq';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import configuration from './config/configuration';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -60,6 +60,7 @@ import { LoyaltyModule } from './modules/loyalty/loyalty.module';
 import { ReferralsModule } from './modules/referrals/referrals.module';
 import { MerchantWalletModule } from './modules/merchant-wallet/merchant-wallet.module';
 import { PayoutsModule } from './modules/payouts/payouts.module';
+import { DashboardPermissionsInterceptor } from './common/interceptors/dashboard-permissions.interceptor';
 
 @Module({
   imports: [
@@ -138,6 +139,15 @@ import { PayoutsModule } from './modules/payouts/payouts.module';
     MerchantWalletModule,
     PayoutsModule,
   ],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Must be an interceptor, not a global guard: global guards run before the
+    // controllers' JwtAuthGuard, so `request.user` would still be empty.
+    // No-ops for the owner and for workstation staff.
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: DashboardPermissionsInterceptor,
+    },
+  ],
 })
 export class AppModule {}

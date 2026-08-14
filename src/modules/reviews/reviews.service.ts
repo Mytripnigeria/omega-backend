@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -9,6 +10,7 @@ import { Repository } from 'typeorm';
 import { OrderReviewEntity } from './entities/order-review.entity';
 import { OrderEntity, OrderStatus } from '../orders/entities/order.entity';
 import { CustomerEntity } from '../customers/entities/customer.entity';
+import { StorageService } from '../storage/storage.service';
 import {
   CreateOrderReviewDto,
   OrderReviewFilterDto,
@@ -19,6 +21,8 @@ import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto'
 
 @Injectable()
 export class ReviewsService {
+  private readonly logger = new Logger(ReviewsService.name);
+
   constructor(
     @InjectRepository(OrderReviewEntity)
     private readonly reviewRepo: Repository<OrderReviewEntity>,
@@ -26,7 +30,62 @@ export class ReviewsService {
     private readonly orderRepo: Repository<OrderEntity>,
     @InjectRepository(CustomerEntity)
     private readonly customerRepo: Repository<CustomerEntity>,
+    private readonly storage: StorageService,
   ) {}
+
+  /** Largest photo we accept per review image, before base64 expansion. */
+  private static readonly MAX_REVIEW_IMAGE_BYTES = 5 * 1024 * 1024;
+
+  /**
+   * Stores the customer's attached photos and returns their public URLs.
+   *
+   * Customers post images as `data:` URLs rather than going through the
+   * admin-only `/files` API. Anything unparseable, oversized or not an image is
+   * skipped rather than failing the whole review — a lost photo must never cost
+   * the merchant the rating and comment.
+   */
+  private async storeReviewImages(
+    customerId: string,
+    images: string[] | undefined,
+  ): Promise<string[] | null> {
+    if (!images?.length) return null;
+
+    const urls: string[] = [];
+    for (const [index, raw] of images.slice(0, 4).entries()) {
+      const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s.exec(
+        (raw ?? '').trim(),
+      );
+      if (!match) continue;
+      const [, mimetype, payload] = match;
+      let buffer: Buffer;
+      try {
+        buffer = Buffer.from(payload, 'base64');
+      } catch {
+        continue;
+      }
+      if (
+        buffer.length === 0 ||
+        buffer.length > ReviewsService.MAX_REVIEW_IMAGE_BYTES
+      ) {
+        continue;
+      }
+      try {
+        const extension = mimetype.split('/')[1]?.split('+')[0] ?? 'jpg';
+        const file = await this.storage.upload(
+          buffer,
+          mimetype,
+          `review-${index + 1}.${extension}`,
+          { folder: 'reviews', uploadedById: customerId },
+        );
+        urls.push(file.url);
+      } catch (err) {
+        this.logger.warn(
+          `Review image upload failed: ${(err as Error).message}`,
+        );
+      }
+    }
+    return urls.length > 0 ? urls : null;
+  }
 
   async submit(
     businessId: string,
@@ -62,6 +121,7 @@ export class ReviewsService {
         : 'Customer',
       rating: dto.rating,
       comment: dto.comment ?? null,
+      imageUrls: await this.storeReviewImages(customerId, dto.images),
       isPublished: false,
     });
 

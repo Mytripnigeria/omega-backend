@@ -531,6 +531,40 @@ export class StorefrontOrdersService {
     return { order: OrderResponseDto.from(fresh ?? saved), payment };
   }
 
+  /**
+   * The customer dismissed or cancelled the Paystack popup.
+   *
+   * An order has to exist before payment (it owns the reference), but one that
+   * was never charged must not linger as a live "pending" order the kitchen can
+   * pick up — the client's rule is that an order only proceeds after a
+   * successful charge. This voids it and reverses everything the placement
+   * reserved (wallet, points, coupon), reusing the same compensation the
+   * payment-kickoff failure path runs.
+   *
+   * Safe by construction: `compensatePlacement` no-ops on an already-paid or
+   * already-cancelled order, so a cancel that races a successful charge cannot
+   * void a paid order.
+   */
+  async abandonPayment(
+    user: UserJwtPayload,
+    orderId: string,
+  ): Promise<OrderResponseDto> {
+    const order = await this.orderRepo.findOne({
+      where: { id: orderId, customerId: user.customerId },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    if (order.paymentStatus !== 'paid') {
+      await this.compensatePlacement(orderId);
+    }
+
+    const refreshed = await this.orderRepo.findOne({
+      where: { id: orderId },
+      relations: ['items'],
+    });
+    return OrderResponseDto.from(refreshed ?? order);
+  }
+
   async verifyPayment(
     user: UserJwtPayload,
     orderId: string,

@@ -21,6 +21,22 @@ export class AdminProfileDto {
 
   @ApiProperty({ example: false })
   twoFactorEnabled: boolean;
+
+  @ApiPropertyOptional({
+    type: [String],
+    nullable: true,
+    example: ['orders.view', 'stocks.manage'],
+    description:
+      'Dashboard modules this login may use. `null` = unrestricted (owner).',
+  })
+  permissions: string[] | null;
+
+  @ApiPropertyOptional({
+    type: [String],
+    nullable: true,
+    description: 'Stores this login may work in. `null` = every store.',
+  })
+  storeIds: string[] | null;
 }
 
 export class AdminLoginResponseDto {

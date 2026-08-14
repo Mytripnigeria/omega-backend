@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Put,
   Delete,
   Body,
   Param,
@@ -24,7 +25,12 @@ import {
 } from '@nestjs/swagger';
 import { ProductsService } from './products.service';
 import { CreateProductDto, CreateVariationDto } from './dto/create-product.dto';
-import { UpdateProductDto, UpdateVariationDto, ToggleProductStatusDto } from './dto/update-product.dto';
+import {
+  UpdateProductDto,
+  UpdateVariationDto,
+  SyncVariationsDto,
+  ToggleProductStatusDto,
+} from './dto/update-product.dto';
 import { FilterProductDto } from './dto/filter-product.dto';
 import { LinkIngredientDto } from './dto/link-ingredient.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -130,6 +136,24 @@ export class ProductsController {
   @Post(':id/variations')
   addVariation(@Param('id') id: string, @Body() dto: CreateVariationDto) {
     return this.productsService.addVariation(id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Replace all variations',
+    description:
+      'Admin-only. Makes the product\'s variations exactly match the supplied ' +
+      'list in one transaction — rows with an `id` are updated in place, rows ' +
+      'without one are added, and omitted rows are removed. Preferred over the ' +
+      'per-variation endpoints when saving an edit form: it cannot leave the ' +
+      'product half-updated, and it preserves each variation\'s ingredient ' +
+      'recipe (which a delete-and-recreate would cascade away).',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Product ID' })
+  @ApiOkResponse({ type: [ProductVariationResponseDto] })
+  @UseGuards(JwtAuthGuard)
+  @Put(':id/variations')
+  syncVariations(@Param('id') id: string, @Body() dto: SyncVariationsDto) {
+    return this.productsService.syncVariations(id, dto);
   }
 
   @ApiOperation({ summary: 'Update a variation', description: 'Admin-only.' })

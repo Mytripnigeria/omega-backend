@@ -1,6 +1,15 @@
-import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Patch,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -13,6 +22,7 @@ import {
   StaffPreferencesDto,
   UpdateStaffPreferencesDto,
 } from './dto/preferences.dto';
+import { ChangePinDto } from './dto/change-pin.dto';
 
 /**
  * Per-staff preferences read/write — staff JWT only. Lives on /staff/me to keep
@@ -25,6 +35,19 @@ import {
 @Controller('staff/me')
 export class StaffPreferencesController {
   constructor(private readonly staffService: StaffService) {}
+
+  @ApiOperation({
+    summary: 'Change my login PIN',
+    description:
+      'Staff-initiated. Verifies the PIN currently in use before replacing it, ' +
+      'so an unattended logged-in till cannot be used to lock the owner out.',
+  })
+  @ApiNoContentResponse()
+  @Patch('pin')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  changePin(@CurrentStaff() staff: StaffJwtPayload, @Body() dto: ChangePinDto) {
+    return this.staffService.changeOwnPin(staff.sub, dto);
+  }
 
   @ApiOperation({
     summary: 'Get my preferences',

@@ -62,6 +62,36 @@ export class IngredientMovementResponseDto {
   @Expose()
   toLocationName: string | null;
 
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description: 'Location this movement debited or credited',
+  })
+  @Expose()
+  locationId: string | null;
+
+  @ApiPropertyOptional({ nullable: true, example: 'Main store' })
+  @Expose()
+  locationName: string | null;
+
+  @ApiPropertyOptional({ nullable: true, example: 'instore' })
+  @Expose()
+  locationType: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: "That location's stock before the movement",
+  })
+  @Expose()
+  locationPreviousStock: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: "That location's stock after the movement",
+  })
+  @Expose()
+  locationNewStock: number | null;
+
   @ApiPropertyOptional({ description: 'Denormalised ingredient name for display' })
   @Expose()
   ingredientName: string | null;
@@ -83,6 +113,16 @@ export class IngredientMovementResponseDto {
         quantity: Number(entity.quantity),
         previousStock: Number(entity.previousStock),
         newStock: Number(entity.newStock),
+        locationPreviousStock:
+          entity.locationPreviousStock === null ||
+          entity.locationPreviousStock === undefined
+            ? null
+            : Number(entity.locationPreviousStock),
+        locationNewStock:
+          entity.locationNewStock === null ||
+          entity.locationNewStock === undefined
+            ? null
+            : Number(entity.locationNewStock),
         ingredientName: entity.ingredient?.name ?? null,
         ingredientUnit: entity.ingredient?.unit ?? null,
       },

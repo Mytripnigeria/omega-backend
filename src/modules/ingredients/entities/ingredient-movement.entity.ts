@@ -92,6 +92,49 @@ export class IngredientMovementEntity {
   @Column({ type: 'varchar', nullable: true })
   toLocationName: string | null;
 
+  // ---- location the movement actually landed on ----
+  //
+  // `previousStock`/`newStock` above are the ingredient's business-wide totals.
+  // Stock physically lives in locations, so the history has to say *where* a
+  // movement happened and what that location held before and after — "was 10
+  // → now 15" is meaningless when the same ingredient sits in three places.
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description: 'Inventory location this movement debited or credited.',
+  })
+  @Column({ type: 'uuid', nullable: true })
+  locationId: string | null;
+
+  @ApiPropertyOptional({ nullable: true, example: 'Main store' })
+  @Column({ type: 'varchar', nullable: true })
+  locationName: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'instore',
+    description: '`instore` (bulk) or `outstore` (the kitchen consumes here).',
+  })
+  @Column({ type: 'varchar', nullable: true })
+  locationType: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 10,
+    description: "That location's stock before the movement.",
+  })
+  @Column({ type: 'decimal', precision: 15, scale: 3, nullable: true })
+  locationPreviousStock: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 15,
+    description: "That location's stock after the movement.",
+  })
+  @Column({ type: 'decimal', precision: 15, scale: 3, nullable: true })
+  locationNewStock: number | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;

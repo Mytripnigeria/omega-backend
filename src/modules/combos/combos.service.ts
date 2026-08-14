@@ -89,21 +89,31 @@ export class CombosService {
     return this.findOne(saved.id);
   }
 
-  async findAll(query: FilterComboDto): Promise<PaginatedResponseDto<ComboResponseDto>> {
+  /**
+   * Combos carry a storeId but no businessId, so tenancy is enforced by joining
+   * the store — without it an unfiltered list returned every business's combos.
+   */
+  async findAll(
+    businessId: string,
+    query: FilterComboDto,
+  ): Promise<PaginatedResponseDto<ComboResponseDto>> {
     const { page = 1, limit = 20, storeId, status, search } = query;
-    const where: FindOptionsWhere<ComboEntity> = {};
 
-    if (storeId) where.storeId = storeId;
-    if (status !== undefined) where.isActive = status;
-    if (search) where.name = Like(`%${search}%`);
+    const qb = this.comboRepo
+      .createQueryBuilder('c')
+      .innerJoin('stores', 's', 's.id = c.storeId')
+      .leftJoinAndSelect('c.items', 'items')
+      .leftJoinAndSelect('items.product', 'product')
+      .where('s.businessId = :businessId', { businessId })
+      .orderBy('c.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
 
-    const [data, total] = await this.comboRepo.findAndCount({
-      where,
-      relations: ['items', 'items.product'],
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    if (storeId) qb.andWhere('c.storeId = :storeId', { storeId });
+    if (status !== undefined) qb.andWhere('c.isActive = :status', { status });
+    if (search) qb.andWhere('c.name ILIKE :search', { search: `%${search}%` });
+
+    const [data, total] = await qb.getManyAndCount();
 
     return paginate(data, total, page, limit, ComboResponseDto.from);
   }

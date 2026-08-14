@@ -39,6 +39,37 @@ export function endOfDayFilter(
   return d;
 }
 
+/**
+ * `YYYY-MM-DD` for the *local* calendar day of `d` (the process timezone, which
+ * src/timezone.ts pins to the merchant's zone).
+ *
+ * Never use `toISOString().slice(0, 10)` for a day label: Postgres buckets days
+ * with `DATE_TRUNC` in the session timezone, so a Nigerian day starts at
+ * `00:00+01:00` — which `toISOString()` renders as `23:00Z` on the *previous*
+ * date. That is why the dashboard chart showed 08-05 on 08-06.
+ */
+export function localDateKey(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * `YYYY-MM-DDTHH:mm:ss` for the local wall clock of `d`, with no timezone
+ * suffix — so `new Date(value)` in the browser parses it back as local time and
+ * `getHours()` returns the hour the merchant actually traded in.
+ *
+ * Hour buckets previously collapsed to a bare `YYYY-MM-DD`, which every hour of
+ * the day shared; the UI parsed that as UTC midnight and rendered every bar as
+ * "1am" in Lagos.
+ */
+export function localDateTimeKey(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${localDateKey(d)}T${pad(d.getHours())}:` +
+    `${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
+}
+
 function parse(value: string | undefined | null): Date | undefined {
   if (!value) return undefined;
   const trimmed = String(value).trim();

@@ -344,7 +344,12 @@ export class IngredientsService {
       // Pick the target location: caller-specified, or the only location if
       // the ingredient has exactly one. Legacy ingredients with no location
       // rows fall through to direct aggregate adjustment (back-compat).
-      const locationRows = await stockRepo.find({ where: { ingredientId: id } });
+      // `location` is joined so the movement row can name where the adjustment
+      // landed (and whether it's an in-store or out-store location).
+      const locationRows = await stockRepo.find({
+        where: { ingredientId: id },
+        relations: ['location'],
+      });
       let targetRow: IngredientLocationStockEntity | null = null;
       if (locationRows.length > 0) {
         if (dto.locationId) {
@@ -403,6 +408,14 @@ export class IngredientsService {
           quantity: dto.adjustment,
           previousStock: previous,
           newStock: next,
+          // When the adjustment landed on a specific location row, name it and
+          // report that location's own figures — "was 10 → now 15" is
+          // ambiguous for an ingredient stocked in several places.
+          locationId: targetRow?.locationId ?? null,
+          locationName: targetRow?.location?.name ?? null,
+          locationType: targetRow?.location?.type ?? null,
+          locationPreviousStock: targetRow ? previous : null,
+          locationNewStock: targetRow ? next : null,
           reason: dto.reason ?? null,
         }),
       );
@@ -426,6 +439,9 @@ export class IngredientsService {
     toLocationId: string,
     quantity: number,
     txManager?: EntityManager,
+    /** Receives the destination row's before/after so the caller's movement
+     *  row can report the location's own figures rather than the total. */
+    onReceived?: (before: number, after: number) => void,
   ): Promise<void> {
     if (quantity <= 0) throw new BadRequestException('Quantity must be positive');
     if (fromLocationId === toLocationId) {
@@ -456,9 +472,11 @@ export class IngredientsService {
           minStock: 0,
         });
       }
+      const toBefore = Number(toRow.currentStock);
       fromRow.currentStock = Number(fromRow.currentStock) - quantity;
-      toRow.currentStock = Number(toRow.currentStock) + quantity;
+      toRow.currentStock = toBefore + quantity;
       toRow.lastRestocked = new Date();
+      onReceived?.(toBefore, toBefore + quantity);
       await stockRepo.save([fromRow, toRow]);
       // Aggregate sum is preserved by definition; still recompute so the
       // earliest-expiry rollup stays in sync.
@@ -512,12 +530,16 @@ export class IngredientsService {
     }
 
     await this.dataSource.transaction(async (m) => {
+      let received: { before: number; after: number } | null = null;
       await this.transferBetweenLocations(
         ingredientId,
         dto.fromLocationId,
         dto.toLocationId,
         dto.quantity,
         m,
+        (before, after) => {
+          received = { before, after };
+        },
       );
       const ing = await m
         .getRepository(IngredientEntity)
@@ -539,6 +561,15 @@ export class IngredientsService {
           referenceId: dto.toLocationId,
           fromLocationName: fromLoc?.name ?? null,
           toLocationName: toLoc?.name ?? null,
+          // The history line reads against the receiving location, which is
+          // what the merchant is actually looking at when they open it.
+          locationId: dto.toLocationId,
+          locationName: toLoc?.name ?? null,
+          locationType: toLoc?.type ?? null,
+          locationPreviousStock:
+            (received as { before: number } | null)?.before ?? null,
+          locationNewStock:
+            (received as { after: number } | null)?.after ?? null,
         }),
       );
     });

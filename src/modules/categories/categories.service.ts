@@ -103,22 +103,31 @@ export class CategoriesService {
     return category;
   }
 
-  async getStats(businessId: string, type?: CategoryType) {
+  /**
+   * Categories are store-scoped, so the summary cards must be too: counting the
+   * whole business next to a per-store list is what made categories look
+   * business-affiliated. Omitting `storeId` still totals the business, which is
+   * what the hub's "all stores" mode wants.
+   */
+  async getStats(businessId: string, type?: CategoryType, storeId?: string) {
     const baseWhere: FindOptionsWhere<CategoryEntity> = { businessId };
     if (type) baseWhere.type = type;
+    if (storeId) baseWhere.storeId = storeId;
+
+    const byTypeQb = this.categoryRepo
+      .createQueryBuilder('c')
+      .select('c.type', 'type')
+      .addSelect('COUNT(*)', 'count')
+      .where('c.businessId = :businessId', { businessId })
+      .groupBy('c.type');
+    if (storeId) byTypeQb.andWhere('c.storeId = :storeId', { storeId });
 
     const [total, active, byTypeRaw] = await Promise.all([
       this.categoryRepo.count({ where: baseWhere }),
       this.categoryRepo.count({ where: { ...baseWhere, isActive: true } }),
       type
         ? Promise.resolve([])
-        : this.categoryRepo
-            .createQueryBuilder('c')
-            .select('c.type', 'type')
-            .addSelect('COUNT(*)', 'count')
-            .where('c.businessId = :businessId', { businessId })
-            .groupBy('c.type')
-            .getRawMany<{ type: CategoryType; count: string }>(),
+        : byTypeQb.getRawMany<{ type: CategoryType; count: string }>(),
     ]);
 
     const byType = Object.values(CategoryType).reduce(

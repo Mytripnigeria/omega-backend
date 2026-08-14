@@ -69,8 +69,11 @@ export class AddOnGroupsController {
   @ApiOperation({ summary: 'Addon group statistics' })
   @ApiOkResponse({ schema: { example: { total: 6, active: 5, inactive: 1 } } })
   @Get('stats')
-  getStats(@BusinessId() businessId: string) {
-    return this.service.getStats(businessId);
+  getStats(
+    @BusinessId() businessId: string,
+    @Query('storeId') storeId?: string,
+  ) {
+    return this.service.getStats(businessId, storeId);
   }
 
   @ApiOperation({ summary: 'Get a single addon group' })

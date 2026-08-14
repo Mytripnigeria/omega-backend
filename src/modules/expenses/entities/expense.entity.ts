@@ -25,6 +25,28 @@ export enum ExpenseCategory {
   OTHER = 'other',
 }
 
+export enum ExpenseItemType {
+  /** Stock bought in — goes on to become inventory. */
+  PURCHASE = 'purchase',
+  /** Money spent that isn't stock (utilities, repairs, transport…). */
+  EXPENSE = 'expense',
+}
+
+/**
+ * One line of an expense submission. Stored as JSONB on the expense so a
+ * submission stays a single reviewable/approvable record rather than N rows.
+ */
+export interface ExpenseItem {
+  name: string;
+  type: ExpenseItemType;
+  unit: string | null;
+  quantity: number;
+  unitPrice: number;
+  /** quantity × unitPrice, kept denormalised so the stored record is auditable. */
+  total: number;
+  supplier: string | null;
+}
+
 @Entity('expenses')
 export class ExpenseEntity {
   @ApiProperty({ format: 'uuid' })
@@ -62,9 +84,33 @@ export class ExpenseEntity {
   @Column({ type: 'varchar', length: 8, default: 'NGN' })
   currency: string;
 
-  @ApiProperty({ example: 'Replacement gas cylinder for kitchen' })
-  @Column({ type: 'text' })
-  description: string;
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Replacement gas cylinder for kitchen',
+    description:
+      'Free-text summary. Optional once `items` are supplied — an itemised ' +
+      'submission describes itself.',
+  })
+  @Column({ type: 'text', nullable: true })
+  description: string | null;
+
+  @ApiPropertyOptional({
+    type: 'array',
+    items: { type: 'object', additionalProperties: true },
+    nullable: true,
+    description:
+      'Line items making up this submission. `amount` above stays the total ' +
+      'across them, so existing reporting is unaffected.',
+  })
+  @Column({ type: 'jsonb', nullable: true })
+  items: ExpenseItem[] | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Supplier for the submission as a whole (items may override).',
+  })
+  @Column({ type: 'varchar', nullable: true })
+  supplierName: string | null;
 
   @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'FileEntity ID for the receipt' })
   @Column({ type: 'uuid', nullable: true })

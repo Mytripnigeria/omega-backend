@@ -96,7 +96,10 @@ const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
     OrderStatus.COMPLETED,
     OrderStatus.CANCELLED,
   ],
-  [OrderStatus.COMPLETED]: [],
+  // COMPLETED → PREPARING keeps the kitchen's "Recall" working now that the
+  // kitchen finishes an order as COMPLETED rather than SERVED. Re-completing is
+  // safe: ingredient consumption and cash settlement are both idempotent.
+  [OrderStatus.COMPLETED]: [OrderStatus.PREPARING],
   [OrderStatus.CANCELLED]: [],
 };
 
@@ -106,6 +109,19 @@ interface ActorContext {
   businessId: string;
   storeId?: string;
   actorName?: string;
+}
+
+/**
+ * One unit of work the kitchen actually makes, after combos have been expanded
+ * into their member products. `variationName` is kept alongside `variationId`
+ * so a line whose snapshot named the variation but omitted its id can be
+ * resolved on its own, without borrowing another line's variation.
+ */
+interface ExpandedOrderLine {
+  productId: string;
+  variationId: string | null;
+  variationName: string | null;
+  units: number;
 }
 
 @Injectable()
@@ -156,6 +172,38 @@ export class OrdersService {
       const v = variation[key];
       if (typeof v === 'string' && v.length > 0) return v;
     }
+    // The shape the POS and storefront actually send is
+    // `{ name, selections: [{ id, name }] }` — the id lives inside the first
+    // selection, not at the top level. Missing this meant variation-scoped
+    // recipes never resolved by id and fell back to matching on name, which
+    // mis-assigned the recipe when one order held two sizes of the same
+    // product (a Big + a Small shawarma deducted two Big recipes).
+    const selections = variation['selections'];
+    if (Array.isArray(selections)) {
+      for (const sel of selections) {
+        if (!sel || typeof sel !== 'object') continue;
+        const id = (sel as Record<string, unknown>)['id'];
+        if (typeof id === 'string' && id.length > 0) return id;
+      }
+    }
+    return null;
+  }
+
+  /** The variation's display name, used to resolve legacy id-less snapshots. */
+  private static variationNameOf(
+    variation: Record<string, unknown> | null,
+  ): string | null {
+    if (!variation) return null;
+    const name = variation['name'];
+    if (typeof name === 'string' && name.trim()) return name.trim();
+    const selections = variation['selections'];
+    if (Array.isArray(selections)) {
+      for (const sel of selections) {
+        if (!sel || typeof sel !== 'object') continue;
+        const n = (sel as Record<string, unknown>)['name'];
+        if (typeof n === 'string' && n.trim()) return n.trim();
+      }
+    }
     return null;
   }
 
@@ -182,8 +230,8 @@ export class OrdersService {
   private async expandOrderItemsToProducts(
     m: import('typeorm').EntityManager,
     items: OrderItemEntity[],
-  ): Promise<Array<{ productId: string; variationId: string | null; units: number }>> {
-    const out: Array<{ productId: string; variationId: string | null; units: number }> = [];
+  ): Promise<ExpandedOrderLine[]> {
+    const out: ExpandedOrderLine[] = [];
 
     const comboIds = Array.from(
       new Set(items.map((i) => i.comboId).filter((id): id is string => !!id)),
@@ -212,6 +260,7 @@ export class OrdersService {
             // A combo bundles concrete products, not variations — always use
             // the member product's default recipe.
             variationId: null,
+            variationName: null,
             units: qty * (Number(ci.quantity) || 1),
           });
         }
@@ -222,6 +271,7 @@ export class OrdersService {
       out.push({
         productId: item.productId,
         variationId: OrdersService.variationIdOf(item.variation),
+        variationName: OrdersService.variationNameOf(item.variation),
         units: qty,
       });
     }
@@ -293,67 +343,96 @@ export class OrdersService {
         byVariation.set(key, list);
       }
 
-      // Older clients snapshot the variation by name only. Resolve those to an
-      // id so their variation-scoped recipe still applies.
-      const nameOnly = expanded.filter((e) => !e.variationId);
-      if (nameOnly.length > 0) {
-        const namesByItem = new Map<OrderItemEntity, string>();
-        for (const item of items) {
-          if (!item.productId || OrdersService.variationIdOf(item.variation)) continue;
-          const name = item.variation?.['name'];
-          if (typeof name === 'string' && name.trim()) {
-            namesByItem.set(item, name.trim().toLowerCase());
-          }
-        }
-        if (namesByItem.size > 0) {
-          const variations = await m.getRepository(ProductVariationEntity).find({
-            where: { productId: In(productIds) },
-          });
-          for (const [item, lowerName] of namesByItem) {
-            const match = variations.find(
-              (v) =>
-                v.productId === item.productId &&
-                v.name.trim().toLowerCase() === lowerName,
-            );
-            if (!match) continue;
-            for (const e of expanded) {
-              if (e.productId === item.productId && !e.variationId) {
-                e.variationId = match.id;
-              }
-            }
-          }
+      // Older snapshots carry the variation by name only. Resolve those to an
+      // id *per line* — a blanket back-fill across every line of the product
+      // made a Big + Small shawarma order deduct the Big recipe twice.
+      const needsNameLookup = expanded.some(
+        (e) => !e.variationId && e.variationName,
+      );
+      if (needsNameLookup) {
+        const variations = await m.getRepository(ProductVariationEntity).find({
+          where: { productId: In(productIds) },
+        });
+        for (const e of expanded) {
+          if (e.variationId || !e.variationName) continue;
+          const lowerName = e.variationName.toLowerCase();
+          const match = variations.find(
+            (v) =>
+              v.productId === e.productId &&
+              v.name.trim().toLowerCase() === lowerName,
+          );
+          if (match) e.variationId = match.id;
         }
       }
 
       for (const e of expanded) {
         const byVariation = recipesByProduct.get(e.productId);
         if (!byVariation) continue;
-        // Variation recipe wins; otherwise the product-level default.
-        const recipe =
-          (e.variationId ? byVariation.get(e.variationId) : undefined) ??
-          byVariation.get('') ??
-          [];
+        // Product-level rows are the merchant's "All variants" lines, so they
+        // apply to every variation; variation-scoped rows are what that one
+        // variation additionally consumes. Previously the variation rows
+        // *replaced* the product-level ones, so "All variants" ingredients were
+        // never deducted for a product that also had per-variation recipes.
+        const recipe = [
+          ...(byVariation.get('') ?? []),
+          ...((e.variationId ? byVariation.get(e.variationId) : undefined) ?? []),
+        ];
         for (const r of recipe) add(r.ingredientId, e.units * Number(r.quantity));
       }
     }
 
     // ---- 3. add-ons ----
     const addonUnits = new Map<string, number>();
+    // Snapshots that carry only a label. The POS used to persist add-ons as
+    // `{name, price}` with no id, so their linked ingredients never resolved
+    // and never left inventory. Resolve those by name against the *ordered
+    // product's own* add-on groups — a business (even a single store) can hold
+    // several add-ons sharing a name, so a catalogue-wide name match would
+    // deduct every one of them.
+    const unresolvedByProduct = new Map<string, Map<string, number>>();
     for (const item of items) {
       const qty = Number(item.quantity) || 0;
       if (qty <= 0 || !Array.isArray(item.addons)) continue;
       for (const a of item.addons) {
         if (!a || typeof a !== 'object') continue;
-        const addonId = OrdersService.addonIdOf(a as Record<string, unknown>);
-        if (!addonId) continue;
+        const record = a as Record<string, unknown>;
         // An add-on may itself be ordered more than once on a single line.
-        const rawQty = (a as Record<string, unknown>)['quantity'];
-        const perLine = Number(rawQty);
+        const perLine = Number(record['quantity']);
         const addonQty = Number.isFinite(perLine) && perLine > 0 ? perLine : 1;
-        addonUnits.set(
-          addonId,
-          (addonUnits.get(addonId) ?? 0) + qty * addonQty,
-        );
+        const units = qty * addonQty;
+
+        const addonId = OrdersService.addonIdOf(record);
+        if (addonId) {
+          addonUnits.set(addonId, (addonUnits.get(addonId) ?? 0) + units);
+          continue;
+        }
+        const name = record['name'];
+        if (!item.productId || typeof name !== 'string' || !name.trim()) continue;
+        const byName =
+          unresolvedByProduct.get(item.productId) ?? new Map<string, number>();
+        const key = name.trim().toLowerCase();
+        byName.set(key, (byName.get(key) ?? 0) + units);
+        unresolvedByProduct.set(item.productId, byName);
+      }
+    }
+    if (unresolvedByProduct.size > 0) {
+      const withAddons = await m.getRepository(ProductEntity).find({
+        where: { id: In(Array.from(unresolvedByProduct.keys())) },
+        relations: ['addonGroups', 'addonGroups.addons'],
+      });
+      for (const product of withAddons) {
+        const byName = unresolvedByProduct.get(product.id);
+        if (!byName) continue;
+        for (const group of product.addonGroups ?? []) {
+          for (const addon of group.addons ?? []) {
+            const units = byName.get(addon.name.trim().toLowerCase());
+            if (!units) continue;
+            addonUnits.set(addon.id, (addonUnits.get(addon.id) ?? 0) + units);
+            // Each snapshot line resolves once, even if two groups on the same
+            // product happen to offer an add-on with the same name.
+            byName.delete(addon.name.trim().toLowerCase());
+          }
+        }
       }
     }
     if (addonUnits.size > 0) {
@@ -390,6 +469,13 @@ export class OrdersService {
         relations: ['location'],
       });
       let consumedFromName: string | null = null;
+      let consumedLocation: {
+        id: string | null;
+        name: string | null;
+        type: string | null;
+        previous: number;
+        next: number;
+      } | null = null;
       if (locationRows.length > 0) {
         const outstoreRows = locationRows.filter(
           (r) => r.location?.type === InventoryLocationType.OUTSTORE,
@@ -399,9 +485,17 @@ export class OrdersService {
           (a, b) => Number(b.currentStock) - Number(a.currentStock),
         );
         const target = candidates[0];
-        target.currentStock = Number(target.currentStock) - need;
+        const locationPrevious = Number(target.currentStock);
+        target.currentStock = locationPrevious - need;
         await locationStockRepo.save(target);
         consumedFromName = target.location?.name ?? null;
+        consumedLocation = {
+          id: target.locationId ?? null,
+          name: target.location?.name ?? null,
+          type: target.location?.type ?? null,
+          previous: locationPrevious,
+          next: locationPrevious - need,
+        };
       }
 
       ing.currentStock = newStock;
@@ -418,6 +512,11 @@ export class OrdersService {
           previousStock,
           newStock,
           fromLocationName: consumedFromName,
+          locationId: consumedLocation?.id ?? null,
+          locationName: consumedLocation?.name ?? null,
+          locationType: consumedLocation?.type ?? null,
+          locationPreviousStock: consumedLocation?.previous ?? null,
+          locationNewStock: consumedLocation?.next ?? null,
           reason: `Order #${order.orderNumber}`,
           referenceType: 'order',
           referenceId: order.id,
@@ -470,6 +569,13 @@ export class OrdersService {
         where: { ingredientId: mv.ingredientId },
         relations: ['location'],
       });
+      let restoredLocation: {
+        id: string | null;
+        name: string | null;
+        type: string | null;
+        previous: number;
+        next: number;
+      } | null = null;
       if (locationRows.length > 0) {
         let target = locationRows.find(
           (r) => r.location?.name === mv.fromLocationName,
@@ -480,8 +586,16 @@ export class OrdersService {
           );
           target = locationRows[0];
         }
-        target.currentStock = Number(target.currentStock) + qty;
+        const locationPrevious = Number(target.currentStock);
+        target.currentStock = locationPrevious + qty;
         await locationStockRepo.save(target);
+        restoredLocation = {
+          id: target.locationId ?? null,
+          name: target.location?.name ?? null,
+          type: target.location?.type ?? null,
+          previous: locationPrevious,
+          next: locationPrevious + qty,
+        };
       }
 
       ing.currentStock = newStock;
@@ -498,6 +612,11 @@ export class OrdersService {
           previousStock,
           newStock,
           fromLocationName: mv.fromLocationName,
+          locationId: restoredLocation?.id ?? null,
+          locationName: restoredLocation?.name ?? null,
+          locationType: restoredLocation?.type ?? null,
+          locationPreviousStock: restoredLocation?.previous ?? null,
+          locationNewStock: restoredLocation?.next ?? null,
           reason: `Reversal — order #${order.orderNumber} cancelled`,
           referenceType: 'order',
           referenceId: order.id,

@@ -6,11 +6,16 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ExpenseEntity, ExpenseStatus } from './entities/expense.entity';
+import {
+  ExpenseEntity,
+  ExpenseItem,
+  ExpenseStatus,
+} from './entities/expense.entity';
 import { StaffEntity } from '../staff/entities/staff.entity';
 import {
   CreateExpenseDto,
   ExpenseFilterDto,
+  ExpenseItemDto,
   MarkPaidExpenseDto,
   ReviewExpenseDto,
   UpdateExpenseDto,
@@ -28,6 +33,34 @@ interface ActorContext {
   businessId: string;
   storeId?: string;
   actorName?: string;
+}
+
+/**
+ * Cleans a submitted line-item list: drops blank rows, rounds money to kobo and
+ * computes each line total server-side so a client can't post a total that
+ * doesn't match its own quantity × unit price.
+ */
+function normaliseExpenseItems(
+  items: ExpenseItemDto[] | undefined,
+  fallbackSupplier?: string,
+): ExpenseItem[] | null {
+  if (!items?.length) return null;
+  const cleaned = items
+    .filter((i) => i.name?.trim())
+    .map((i) => {
+      const quantity = Number(i.quantity) || 0;
+      const unitPrice = Number(i.unitPrice) || 0;
+      return {
+        name: i.name.trim(),
+        type: i.type,
+        unit: i.unit?.trim() || null,
+        quantity,
+        unitPrice,
+        total: Math.round(quantity * unitPrice * 100) / 100,
+        supplier: i.supplier?.trim() || fallbackSupplier?.trim() || null,
+      };
+    });
+  return cleaned.length > 0 ? cleaned : null;
 }
 
 @Injectable()
@@ -56,15 +89,28 @@ export class ExpensesService {
       receiptUrl = file.url;
     }
 
+    const items = normaliseExpenseItems(dto.items, dto.supplierName);
+    if (!items && !dto.description?.trim()) {
+      throw new BadRequestException(
+        'Add at least one item, or a description of the expense',
+      );
+    }
+
     const expense = this.repo.create({
       businessId: actor.businessId,
       storeId: actor.storeId,
       requestedById: staff.id,
       requestedByName: `${staff.firstName} ${staff.lastName}`,
       category: dto.category,
-      amount: dto.amount,
+      // An itemised submission's total is always the sum of its lines, so the
+      // stored amount can't disagree with what it's made of.
+      amount: items
+        ? items.reduce((sum, i) => sum + i.total, 0)
+        : (dto.amount ?? 0),
       currency: dto.currency ?? 'NGN',
-      description: dto.description,
+      description: dto.description ?? null,
+      items,
+      supplierName: dto.supplierName ?? null,
       receiptFileId: dto.receiptFileId ?? null,
       receiptUrl,
       status: ExpenseStatus.PENDING,
@@ -182,8 +228,22 @@ export class ExpensesService {
       }
     }
     if (dto.category !== undefined) expense.category = dto.category;
-    if (dto.amount !== undefined) expense.amount = dto.amount;
     if (dto.description !== undefined) expense.description = dto.description;
+    if (dto.supplierName !== undefined) expense.supplierName = dto.supplierName;
+
+    if (dto.items !== undefined) {
+      expense.items = normaliseExpenseItems(
+        dto.items,
+        dto.supplierName ?? expense.supplierName ?? undefined,
+      );
+    }
+    // The total follows the lines whenever the submission is itemised; an
+    // explicit amount only applies to a free-text submission.
+    if (expense.items?.length) {
+      expense.amount = expense.items.reduce((sum, i) => sum + i.total, 0);
+    } else if (dto.amount !== undefined) {
+      expense.amount = dto.amount;
+    }
 
     await this.repo.save(expense);
     return ExpenseResponseDto.from(expense);

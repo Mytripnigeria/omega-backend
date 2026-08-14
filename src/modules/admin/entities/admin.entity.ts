@@ -46,6 +46,49 @@ export class AdminEntity {
   @Column({ default: 'owner' })
   role: string;
 
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description:
+      'Staff member this dashboard login belongs to. Set when a merchant ' +
+      'grants one of their staff access to the merchant dashboard; null for ' +
+      'the business owner.',
+  })
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  staffId: string | null;
+
+  @ApiPropertyOptional({
+    type: [String],
+    nullable: true,
+    description:
+      'Stores this login may work in. `null` means every store in the ' +
+      'business (the owner). A staff login is normally restricted to the ' +
+      'store(s) they actually work at.',
+  })
+  @Column({ type: 'simple-array', nullable: true })
+  storeIds: string[] | null;
+
+  @ApiProperty({
+    example: false,
+    description:
+      'Forces a password change on next login — set when a temporary password ' +
+      'was issued.',
+  })
+  @Column({ default: false })
+  mustChangePassword: boolean;
+
+  @ApiPropertyOptional({
+    type: [String],
+    nullable: true,
+    description:
+      'Dashboard modules this login may use (e.g. `stocks.manage`, ' +
+      '`reports.view`). `null` means unrestricted — the business owner. See ' +
+      'common/permissions/dashboard-permissions.ts.',
+  })
+  @Column({ type: 'simple-array', nullable: true })
+  permissions: string[] | null;
+
   @ApiProperty({ writeOnly: true, description: 'Hashed refresh token — never returned in responses' })
   @Column({ nullable: true, select: false })
   refreshToken: string;

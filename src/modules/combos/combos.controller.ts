@@ -27,6 +27,8 @@ import { UpdateComboDto, ToggleComboStatusDto } from './dto/update-combo.dto';
 import { UpdateComboItemDto } from './dto/update-combo-item.dto';
 import { FilterComboDto } from './dto/filter-combo.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { JwtOrStaffGuard } from '../../common/guards/jwt-or-staff.guard';
+import { BusinessContext } from '../../common/decorators/business-context.decorator';
 import { ComboResponseDto } from './dto/combo-response.dto';
 
 @ApiTags('combos')
@@ -59,9 +61,14 @@ export class CombosController {
       },
     },
   })
+  // Staff-readable: the workstation POS lists combos alongside products.
+  @UseGuards(JwtOrStaffGuard)
   @Get()
-  findAll(@Query() query: FilterComboDto) {
-    return this.combosService.findAll(query);
+  findAll(
+    @BusinessContext() businessId: string,
+    @Query() query: FilterComboDto,
+  ) {
+    return this.combosService.findAll(businessId, query);
   }
 
   @ApiOperation({ summary: 'Combo statistics' })
@@ -75,6 +82,7 @@ export class CombosController {
   @ApiOperation({ summary: 'Get a single combo' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: ComboResponseDto })
+  @UseGuards(JwtOrStaffGuard)
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.combosService.findOne(id);

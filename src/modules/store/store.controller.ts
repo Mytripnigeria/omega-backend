@@ -27,6 +27,7 @@ import { UpdateStoreDto } from './dto/update-store.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { BusinessId } from '../../common/decorators/business-id.decorator';
 import { StoreResponseDto } from './dto/store-response.dto';
+import { AllowedStoreIds } from '../../common/decorators/allowed-store-ids.decorator';
 
 @ApiTags('stores')
 @ApiBearerAuth()
@@ -62,16 +63,24 @@ export class StoreController {
     },
   })
   @Get()
-  findAll(@BusinessId() businessId: string, @Query() query: PaginationQueryDto) {
-    return this.storeService.findAll(businessId, query);
+  findAll(
+    @BusinessId() businessId: string,
+    @AllowedStoreIds() allowedStoreIds: string[] | null,
+    @Query() query: PaginationQueryDto,
+  ) {
+    return this.storeService.findAll(businessId, query, allowedStoreIds);
   }
 
   @ApiOperation({ summary: 'Get a single store' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: StoreResponseDto })
   @Get(':id')
-  findOne(@BusinessId() businessId: string, @Param('id') id: string) {
-    return this.storeService.findOne(businessId, id);
+  findOne(
+    @BusinessId() businessId: string,
+    @AllowedStoreIds() allowedStoreIds: string[] | null,
+    @Param('id') id: string,
+  ) {
+    return this.storeService.findOne(businessId, id, allowedStoreIds);
   }
 
   @ApiOperation({ summary: 'Update a store', description: 'Admin-only. Partial update.' })

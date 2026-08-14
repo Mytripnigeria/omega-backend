@@ -53,6 +53,15 @@ export class OrderReviewEntity {
   isPublished: boolean;
 
   @ApiProperty({ type: String, format: 'date-time' })
+  @ApiPropertyOptional({
+    type: [String],
+    nullable: true,
+    description:
+      'Public URLs of photos the customer attached to the review (max 4).',
+  })
+  @Column({ type: 'jsonb', nullable: true })
+  imageUrls: string[] | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 

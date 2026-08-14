@@ -23,6 +23,12 @@ import {
   MovementType,
 } from '../ingredients/entities/ingredient-movement.entity';
 import {
+  endOfDayFilter,
+  localDateKey,
+  localDateTimeKey,
+  startOfDayFilter,
+} from '../../common/utils/date-range';
+import {
   ReportsRangeDto,
   SalesReportFilterDto,
   DashboardSummaryFilterDto,
@@ -44,6 +50,8 @@ import {
   StockStatus,
   TopProductRowDto,
   TopProductsReportDto,
+  ProductPopularityDto,
+  ProductPerformanceDto,
   WasteIngredientRowDto,
   WasteLogRowDto,
   WasteReasonRowDto,
@@ -55,6 +63,28 @@ interface ActorContext {
   sub_type: 'admin' | 'staff';
   businessId: string;
   storeId?: string;
+}
+
+/**
+ * Display name of an order line's variation snapshot. The shape has drifted
+ * across clients: `{name}` from the storefront, `{name, selections:[{name}]}`
+ * from the POS.
+ */
+function variationNameOfSnapshot(
+  variation: Record<string, unknown> | null,
+): string | null {
+  if (!variation) return null;
+  const name = variation['name'];
+  if (typeof name === 'string' && name.trim()) return name.trim();
+  const selections = variation['selections'];
+  if (Array.isArray(selections)) {
+    for (const sel of selections) {
+      if (!sel || typeof sel !== 'object') continue;
+      const n = (sel as Record<string, unknown>)['name'];
+      if (typeof n === 'string' && n.trim()) return n.trim();
+    }
+  }
+  return null;
 }
 
 @Injectable()
@@ -92,10 +122,14 @@ export class ReportsService {
     const now = new Date();
     const defaultFrom = new Date(now);
     defaultFrom.setDate(defaultFrom.getDate() - 30);
-    const from = filter.dateFrom ? new Date(filter.dateFrom) : defaultFrom;
-    const to = filter.dateTo
-      ? new Date(`${filter.dateTo}T23:59:59`)
-      : new Date(now);
+    // Resolve both bounds on the merchant's wall clock. `new Date('2026-08-13')`
+    // is UTC midnight — 01:00 in Lagos — so a bare `dateFrom` used to drop every
+    // order traded between midnight and 1am, which is why the platform behaved
+    // as though a new day began at 1am. The shared helpers also tolerate a full
+    // ISO `dateTo` (string-concatenating `T23:59:59` onto one yields an
+    // Invalid Date).
+    const from = startOfDayFilter(filter.dateFrom) ?? defaultFrom;
+    const to = endOfDayFilter(filter.dateTo) ?? new Date(now);
     return { from, to };
   }
 
@@ -185,7 +219,13 @@ export class ReportsService {
     const buckets: SalesReportBucketDto[] = bucketRows.map((r) => {
       const bucketDate = new Date(r.bucket);
       return {
-        bucket: bucketDate.toISOString().split('T')[0],
+        // Label the bucket on the merchant's wall clock. Hour granularity keeps
+        // the time component (otherwise every hour of a day shared one label and
+        // the UI rendered them all as "1am"); coarser units stay date-only.
+        bucket:
+          truncUnit === 'hour'
+            ? localDateTimeKey(bucketDate)
+            : localDateKey(bucketDate),
         orders: Number(r.orders),
         items: itemMap.get(bucketDate.getTime()) ?? 0,
         revenue: Number(r.revenue),
@@ -209,6 +249,191 @@ export class ReportsService {
   }
 
   // ----- top products -----
+
+  /**
+   * In-depth per-item performance: every product/combo, every variation of a
+   * product, and every add-on, ranked by revenue.
+   *
+   * Variations and add-ons are only ever recorded as JSON snapshots on the
+   * order line, so they're aggregated in application code rather than SQL —
+   * the row count is bounded by the report's date range, and doing it here
+   * keeps the legacy snapshot shapes (id-less add-ons, `selections[]`
+   * variations) handled in one place.
+   */
+  async getProductPerformance(
+    actor: ActorContext,
+    filter: ReportsRangeDto,
+  ): Promise<ProductPerformanceDto> {
+    const { from, to } = this.dateBound(filter);
+    const storeId = this.effectiveStoreId(actor, filter.storeId);
+
+    const qb = this.itemRepo
+      .createQueryBuilder('i')
+      .innerJoin('i.order', 'o')
+      .where('o.businessId = :bid', { bid: actor.businessId })
+      .andWhere('o.status NOT IN (:...excluded)', {
+        excluded: [OrderStatus.CANCELLED],
+      })
+      .andWhere('o.createdAt >= :from', { from })
+      .andWhere('o.createdAt <= :to', { to })
+      .select('o.id', 'orderId')
+      .addSelect('i.productId', 'productId')
+      .addSelect('i.comboId', 'comboId')
+      .addSelect('i.name', 'name')
+      .addSelect('i.quantity', 'quantity')
+      .addSelect('i.subtotal', 'subtotal')
+      .addSelect('i.variation', 'variation')
+      .addSelect('i.addons', 'addons');
+    if (storeId) qb.andWhere('o.storeId = :sid', { sid: storeId });
+
+    const rows = await qb.getRawMany<{
+      orderId: string;
+      productId: string | null;
+      comboId: string | null;
+      name: string;
+      quantity: number;
+      subtotal: string;
+      variation: Record<string, unknown> | null;
+      addons: Record<string, unknown>[] | null;
+    }>();
+
+    interface Bucket {
+      name: string;
+      variationName: string | null;
+      productId: string | null;
+      unitsSold: number;
+      revenue: number;
+      orderIds: Set<string>;
+    }
+    const make = (map: Map<string, Bucket>, key: string, seed: Omit<Bucket, 'unitsSold' | 'revenue' | 'orderIds'>) => {
+      let bucket = map.get(key);
+      if (!bucket) {
+        bucket = { ...seed, unitsSold: 0, revenue: 0, orderIds: new Set() };
+        map.set(key, bucket);
+      }
+      return bucket;
+    };
+
+    const products = new Map<string, Bucket>();
+    const variations = new Map<string, Bucket>();
+    const addons = new Map<string, Bucket>();
+
+    for (const row of rows) {
+      const quantity = Number(row.quantity) || 0;
+      const revenue = Number(row.subtotal) || 0;
+      if (quantity <= 0) continue;
+
+      // The line's own name already includes the variation for storefront
+      // orders ("Jollof Rice (Large)"), so strip it back to the product name
+      // where a variation is recorded separately.
+      const variationName = variationNameOfSnapshot(row.variation);
+      const baseName = variationName
+        ? row.name.replace(new RegExp(`\\\\s*\\\\(${variationName}\\\\)$`), '')
+        : row.name;
+
+      const productKey = row.productId ?? row.comboId ?? `name:${baseName}`;
+      const product = make(products, productKey, {
+        name: baseName,
+        variationName: null,
+        productId: row.productId ?? null,
+      });
+      product.unitsSold += quantity;
+      product.revenue += revenue;
+      product.orderIds.add(row.orderId);
+
+      if (variationName) {
+        const variation = make(variations, `${productKey}::${variationName}`, {
+          name: baseName,
+          variationName,
+          productId: row.productId ?? null,
+        });
+        variation.unitsSold += quantity;
+        variation.revenue += revenue;
+        variation.orderIds.add(row.orderId);
+      }
+
+      for (const raw of row.addons ?? []) {
+        if (!raw || typeof raw !== 'object') continue;
+        const addonName = (raw as Record<string, unknown>)['name'];
+        if (typeof addonName !== 'string' || !addonName.trim()) continue;
+        const perLine = Number((raw as Record<string, unknown>)['quantity']);
+        const addonQty =
+          (Number.isFinite(perLine) && perLine > 0 ? perLine : 1) * quantity;
+        const price = Number((raw as Record<string, unknown>)['price']) || 0;
+
+        const addon = make(addons, addonName.trim().toLowerCase(), {
+          name: addonName.trim(),
+          variationName: null,
+          productId: null,
+        });
+        addon.unitsSold += addonQty;
+        addon.revenue += price * addonQty;
+        addon.orderIds.add(row.orderId);
+      }
+    }
+
+    const shape = (map: Map<string, Bucket>) =>
+      Array.from(map.values())
+        .map((b) => ({
+          name: b.name,
+          variationName: b.variationName,
+          productId: b.productId,
+          unitsSold: b.unitsSold,
+          ordersCount: b.orderIds.size,
+          revenue: b.revenue,
+        }))
+        .sort((a, b) => b.revenue - a.revenue || b.unitsSold - a.unitsSold);
+
+    const productRows = shape(products);
+    return {
+      products: productRows,
+      variations: shape(variations),
+      addons: shape(addons),
+      totalUnits: productRows.reduce((s, r) => s + r.unitsSold, 0),
+      totalRevenue: productRows.reduce((s, r) => s + r.revenue, 0),
+    };
+  }
+
+  /**
+   * Units sold per product, most-ordered first, over the filter window
+   * (defaulting to the last 30 days). Backs the POS menu ordering so popular
+   * items show up first on the "All" tab.
+   */
+  async getProductPopularity(
+    actor: ActorContext,
+    filter: ReportsRangeDto,
+  ): Promise<ProductPopularityDto> {
+    const { from, to } = this.dateBound(filter);
+    const storeId = this.effectiveStoreId(actor, filter.storeId);
+
+    const qb = this.itemRepo
+      .createQueryBuilder('i')
+      .innerJoin('i.order', 'o')
+      .where('o.businessId = :bid', { bid: actor.businessId })
+      .andWhere('o.status NOT IN (:...excluded)', {
+        excluded: [OrderStatus.CANCELLED],
+      })
+      .andWhere('o.createdAt >= :from', { from })
+      .andWhere('o.createdAt <= :to', { to })
+      .andWhere('i.productId IS NOT NULL')
+      .select('i.productId', 'productId')
+      .addSelect('COALESCE(SUM(i.quantity), 0)', 'unitsSold')
+      .groupBy('i.productId')
+      .orderBy('"unitsSold"', 'DESC');
+    if (storeId) qb.andWhere('o.storeId = :sid', { sid: storeId });
+
+    const rows = await qb.getRawMany<{
+      productId: string;
+      unitsSold: string;
+    }>();
+
+    return {
+      rows: rows.map((r) => ({
+        productId: r.productId,
+        unitsSold: Number(r.unitsSold),
+      })),
+    };
+  }
 
   async getTopProducts(
     actor: ActorContext,

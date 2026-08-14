@@ -133,7 +133,9 @@ export class ReportsExporter {
             { key: 'revenue', header: 'Revenue', width: 16, money: true },
           ],
           rows: r.buckets.map((b) => ({
-            bucket: new Date(b.bucket).toISOString().slice(0, 10),
+            // Already a local-wall-clock label from the sales report; re-parsing
+            // it through toISOString() would shift it back a day.
+            bucket: b.bucket,
             orders: b.orders,
             items: b.items,
             revenue: b.revenue,
