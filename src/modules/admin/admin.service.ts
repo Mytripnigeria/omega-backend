@@ -103,8 +103,16 @@ export class AdminService {
     });
   }
 
+  /**
+   * Clearing `mustChangePassword` here is the point of the flag: a staff member
+   * granted dashboard access starts on a generated temporary password, and the
+   * only thing that should retire it is actually choosing a new one.
+   */
   async updatePassword(id: string, newHash: string): Promise<void> {
-    await this.adminRepo.update(id, { password: newHash });
+    await this.adminRepo.update(id, {
+      password: newHash,
+      mustChangePassword: false,
+    });
   }
 
   async setTwoFactor(

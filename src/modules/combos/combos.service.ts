@@ -101,7 +101,10 @@ export class CombosService {
 
     const qb = this.comboRepo
       .createQueryBuilder('c')
-      .innerJoin('stores', 's', 's.id = c.storeId')
+      // combos.storeId is a varchar while stores.id is a uuid, so the join has
+      // to cast — comparing them directly raises 42883 (operator does not
+      // exist: uuid = character varying) and 500s the whole list.
+      .innerJoin('stores', 's', 's.id::text = c.storeId')
       .leftJoinAndSelect('c.items', 'items')
       .leftJoinAndSelect('items.product', 'product')
       .where('s.businessId = :businessId', { businessId })

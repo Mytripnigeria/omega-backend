@@ -260,6 +260,9 @@ export class AuthService {
         // carry them — not just /auth/admin/me on a later refresh.
         permissions: admin.permissions ?? null,
         storeIds: admin.storeIds ?? null,
+        // Staff granted dashboard access start on a generated temporary
+        // password; the hub gates them on this until they choose their own.
+        mustChangePassword: admin.mustChangePassword ?? false,
       },
     };
   }
@@ -277,6 +280,9 @@ export class AuthService {
       // Drives which modules the hub renders. Null = unrestricted owner.
       permissions: admin.permissions ?? null,
       storeIds: admin.storeIds ?? null,
+      // Kept in sync with the login response so a page refresh doesn't drop
+      // the gate a temporary password is still under.
+      mustChangePassword: admin.mustChangePassword ?? false,
     };
   }
 

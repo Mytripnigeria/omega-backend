@@ -987,13 +987,16 @@ export class ReportsService {
       });
     if (storeId) orderQb.andWhere('o.storeId = :sid', { sid: storeId });
 
+    // Group by staffId ALONE. `staffName` is a snapshot taken when the order
+    // was placed, so grouping by it too split one person into several rows the
+    // moment their name or staff code ever changed — and the POS "My sales"
+    // panel reads a single row, so a cashier saw only part of their takings.
     const orderRows = await orderQb
       .select('o.staffId', 'staffId')
-      .addSelect('o.staffName', 'staffName')
+      .addSelect('MAX(o.staffName)', 'staffName')
       .addSelect('COUNT(o.id)', 'ordersProcessed')
       .addSelect('COALESCE(SUM(o.total), 0)', 'salesAttributed')
       .groupBy('o.staffId')
-      .addGroupBy('o.staffName')
       .getRawMany<{
         staffId: string;
         staffName: string | null;
@@ -1034,11 +1037,28 @@ export class ReportsService {
       });
     }
 
-    const rows: StaffPerformanceRowDto[] = Array.from(staffIds).map((sid) => {
+    // Resolve display names from the staff record so the panel shows a person,
+    // not the code the order snapshotted.
+    const staffIdList = Array.from(staffIds);
+    const nameById = new Map<string, string>();
+    if (staffIdList.length > 0) {
+      const people = await this.shiftRepo.manager
+        .createQueryBuilder()
+        .select(['s.id AS id', 's."firstName" AS "firstName"', 's."lastName" AS "lastName"'])
+        .from('staff', 's')
+        .where('s.id IN (:...ids)', { ids: staffIdList })
+        .getRawMany<{ id: string; firstName: string; lastName: string }>();
+      for (const p of people) {
+        const full = `${p.firstName ?? ''} ${p.lastName ?? ''}`.trim();
+        if (full) nameById.set(p.id, full);
+      }
+    }
+
+    const rows: StaffPerformanceRowDto[] = staffIdList.map((sid) => {
       const o = orderMap.get(sid);
       return {
         staffId: sid,
-        staffName: o?.staffName ?? '',
+        staffName: nameById.get(sid) ?? o?.staffName ?? '',
         ordersProcessed: o?.orders ?? 0,
         salesAttributed: o?.sales ?? 0,
         hoursWorked: Number((hoursMap.get(sid) ?? 0).toFixed(2)),

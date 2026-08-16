@@ -430,6 +430,18 @@ export class CashSessionsService {
       qb.andWhere('s.openedAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     const [data, total] = await qb.getManyAndCount();
+
+    // The expected* columns are only written at close, so an OPEN session
+    // reads back as 0 — which renders as "Opening float ₦5,000 / Expected ₦0"
+    // on the manager's Registers tab and looks like the till is short. Fill
+    // them live from the order ledger instead. Only open rows are recomputed,
+    // so a page of closed history costs no extra queries.
+    for (const session of data) {
+      if (session.status !== 'open') continue;
+      const expected = await this.computeExpected(session);
+      Object.assign(session, expected);
+    }
+
     return paginate(data, total, page, limit, CashSessionResponseDto.from);
   }
 

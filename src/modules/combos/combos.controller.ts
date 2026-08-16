@@ -33,7 +33,12 @@ import { ComboResponseDto } from './dto/combo-response.dto';
 
 @ApiTags('combos')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+// Guards are ADDITIVE in Nest: a class-level guard runs in addition to any
+// method-level one, never instead of it. So the class guard must be the
+// *permissive* one and admin-only routes tighten it per method — the reverse
+// (admin-only class + staff method) can never pass for staff and 401s, which
+// logged the whole workstation out the moment the POS asked for combos.
+@UseGuards(JwtOrStaffGuard)
 @Controller('combos')
 export class CombosController {
   constructor(private readonly combosService: CombosService) {}
@@ -43,6 +48,7 @@ export class CombosController {
     description: 'Admin-only. Creates a bundled combo meal at a discounted price. `originalPrice` is the sum of individual item prices; `price` is the combo selling price.',
   })
   @ApiCreatedResponse({ type: ComboResponseDto })
+  @UseGuards(JwtAuthGuard)
   @Post()
   create(@Body() dto: CreateComboDto) {
     return this.combosService.create(dto);
@@ -62,7 +68,6 @@ export class CombosController {
     },
   })
   // Staff-readable: the workstation POS lists combos alongside products.
-  @UseGuards(JwtOrStaffGuard)
   @Get()
   findAll(
     @BusinessContext() businessId: string,
@@ -74,6 +79,7 @@ export class CombosController {
   @ApiOperation({ summary: 'Combo statistics' })
   @ApiQuery({ name: 'storeId', required: false, format: 'uuid' })
   @ApiOkResponse({ schema: { example: { total: 10, active: 9, inactive: 1, totalSales: 342 } } })
+  @UseGuards(JwtAuthGuard)
   @Get('stats')
   getStats(@Query('storeId') storeId?: string) {
     return this.combosService.getStats(storeId);
@@ -82,7 +88,6 @@ export class CombosController {
   @ApiOperation({ summary: 'Get a single combo' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: ComboResponseDto })
-  @UseGuards(JwtOrStaffGuard)
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.combosService.findOne(id);
@@ -91,6 +96,7 @@ export class CombosController {
   @ApiOperation({ summary: 'Update a combo', description: 'Admin-only. Partial update.' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: ComboResponseDto })
+  @UseGuards(JwtAuthGuard)
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateComboDto) {
     return this.combosService.update(id, dto);
@@ -99,6 +105,7 @@ export class CombosController {
   @ApiOperation({ summary: 'Soft-delete a combo', description: 'Admin-only.' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiNoContentResponse()
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id') id: string) {
@@ -108,6 +115,7 @@ export class CombosController {
   @ApiOperation({ summary: 'Toggle combo availability', description: 'Admin-only. Toggles the `isActive` flag.' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: ComboResponseDto })
+  @UseGuards(JwtAuthGuard)
   @Patch(':id/status')
   toggleStatus(@Param('id') id: string, @Body() dto: ToggleComboStatusDto) {
     return this.combosService.toggleStatus(id, dto);
@@ -116,6 +124,7 @@ export class CombosController {
   @ApiOperation({ summary: 'Add a product to the combo', description: 'Admin-only.' })
   @ApiParam({ name: 'id', format: 'uuid', description: 'Combo ID' })
   @ApiCreatedResponse({ description: 'Item added to combo.' })
+  @UseGuards(JwtAuthGuard)
   @Post(':id/items')
   addItem(@Param('id') id: string, @Body() dto: CreateComboItemDto) {
     return this.combosService.addItem(id, dto);
@@ -125,6 +134,7 @@ export class CombosController {
   @ApiParam({ name: 'id', format: 'uuid', description: 'Combo ID' })
   @ApiParam({ name: 'itemId', format: 'uuid', description: 'Combo Item ID' })
   @ApiOkResponse({ description: 'Item updated.' })
+  @UseGuards(JwtAuthGuard)
   @Patch(':id/items/:itemId')
   updateItem(
     @Param('id') id: string,
@@ -138,6 +148,7 @@ export class CombosController {
   @ApiParam({ name: 'id', format: 'uuid', description: 'Combo ID' })
   @ApiParam({ name: 'itemId', format: 'uuid', description: 'Combo Item ID' })
   @ApiNoContentResponse()
+  @UseGuards(JwtAuthGuard)
   @Delete(':id/items/:itemId')
   @HttpCode(HttpStatus.NO_CONTENT)
   removeItem(@Param('id') id: string, @Param('itemId') itemId: string) {
