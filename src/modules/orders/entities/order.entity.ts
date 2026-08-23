@@ -32,7 +32,7 @@ export enum OrderStatus {
   CANCELLED = 'cancelled',
 }
 
-export type OrderChannel = 'pos' | 'website' | 'phone' | 'chowdeck';
+export type OrderChannel = 'pos' | 'website' | 'phone' | 'chowdeck' | 'clove';
 
 @Entity('orders')
 @Unique(['storeId', 'orderNumber'])
@@ -96,13 +96,13 @@ export class OrderEntity {
   tableNumber: string | null;
 
   @ApiProperty({
-    enum: ['pos', 'website', 'phone', 'chowdeck'],
+    enum: ['pos', 'website', 'phone', 'chowdeck', 'clove'],
     example: 'pos',
     description: '`chowdeck` marks an order that arrived from the Chowdeck marketplace.',
   })
   @Column({
     type: 'enum',
-    enum: ['pos', 'website', 'phone', 'chowdeck'],
+    enum: ['pos', 'website', 'phone', 'chowdeck', 'clove'],
     default: 'pos',
   })
   channel: OrderChannel;

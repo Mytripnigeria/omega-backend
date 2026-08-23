@@ -58,6 +58,8 @@ async function bootstrap() {
     exclude: [
       { path: 'webhook/chowdeck', method: RequestMethod.POST },
       { path: 'webhook/chowdeck/:token', method: RequestMethod.POST },
+      { path: 'webhook/cloveai', method: RequestMethod.POST },
+      { path: 'webhook/cloveai/:token', method: RequestMethod.POST },
     ],
   });
 

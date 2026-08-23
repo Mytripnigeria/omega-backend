@@ -1,14 +1,21 @@
 import {
-  IsString,
-  IsOptional,
+  IsArray,
   IsBoolean,
   IsNumber,
-  IsArray,
+  IsOptional,
+  IsString,
   IsUUID,
+  Max,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+/** numeric(15,2) tops out just below 10^13. */
+export const MAX_MONEY = 9_999_999_999_999.99;
+/** Postgres int4 upper bound, for stock counters. */
+export const MAX_INT4 = 2_147_483_647;
 
 export class CreateVariationDto {
   @ApiProperty({ example: 'Large', description: 'Variation display name' })
@@ -20,19 +27,29 @@ export class CreateVariationDto {
   @IsString()
   sku?: string;
 
+  // Bounds match the columns: numeric(15,2) rejects anything from 10^13 up and
+  // stock is a plain int. Without them an out-of-range figure reached Postgres
+  // and came back as a bare 500 "internal server error" on the products form —
+  // with no clue which field was at fault.
   @ApiPropertyOptional({ example: 2500, description: 'Cost price in kobo (NGN)' })
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(MAX_MONEY)
   price?: number;
 
   @ApiPropertyOptional({ example: 3200, description: 'Selling price in kobo (NGN)' })
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(MAX_MONEY)
   sellingPrice?: number;
 
   @ApiPropertyOptional({ example: 50, description: 'Initial stock quantity for this variation' })
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(MAX_INT4)
   stock?: number;
 }
 
@@ -96,11 +113,15 @@ export class CreateProductDto {
   @ApiPropertyOptional({ example: 1800, description: 'Cost price in kobo (NGN)' })
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(MAX_MONEY)
   price?: number;
 
   @ApiPropertyOptional({ example: 2500, description: 'Selling price in kobo (NGN)' })
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(MAX_MONEY)
   sellingPrice?: number;
 
   @ApiPropertyOptional({ example: 'JOLLOF-001', description: 'Stock-keeping unit' })
@@ -111,6 +132,8 @@ export class CreateProductDto {
   @ApiPropertyOptional({ example: 100, description: 'Initial stock quantity (for non-ingredient-tracked products)' })
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(MAX_INT4)
   stock?: number;
 
   @ApiPropertyOptional({ example: true, description: 'true = available for sale; false = hidden/sold out' })

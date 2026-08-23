@@ -43,12 +43,14 @@ import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.servic
 import { TableEntity, TableStatus } from '../tables/entities/table.entity';
 import { PushService } from '../push-notifications/push.service';
 import { ChowdeckService } from '../chowdeck/chowdeck.service';
+import { CloveService } from '../clove/clove.service';
 import { ProductIngredientEntity } from '../products/entities/product-ingredient.entity';
 import { ProductVariationEntity } from '../products/entities/product-variation.entity';
 import { ComboItemEntity } from '../combos/entities/combo-item.entity';
 import { AddonIngredientEntity } from '../addon-groups/entities/addon-ingredient.entity';
 import { DeliveryRegionEntity } from '../delivery-regions/entities/delivery-region.entity';
 import { ProductEntity } from '../products/entities/product.entity';
+import { StoreLinksService } from '../store-links/store-links.service';
 import { IngredientEntity } from '../ingredients/entities/ingredient.entity';
 import {
   IngredientMovementEntity,
@@ -163,6 +165,9 @@ export class OrdersService {
     // two modules reference each other.
     @Inject(forwardRef(() => ChowdeckService))
     private readonly chowdeck: ChowdeckService,
+    @Inject(forwardRef(() => CloveService))
+    private readonly clove: CloveService,
+    private readonly storeLinks: StoreLinksService,
   ) {}
 
   /**
@@ -1019,15 +1024,37 @@ export class OrdersService {
     const qb = this.orderRepo
       .createQueryBuilder('o')
       .leftJoinAndSelect('o.items', 'items')
-      .where('o.businessId = :businessId', { businessId: actor.businessId })
       .orderBy('o.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
+    // Staff tenancy is enforced by the store filter below (which includes
+    // linked stores from other businesses); everyone else stays business-scoped.
+    if (actor.sub_type !== 'staff') {
+      qb.andWhere('o.businessId = :businessId', { businessId: actor.businessId });
+    }
 
     if (filter.storeId) qb.andWhere('o.storeId = :storeId', { storeId: filter.storeId });
-    // Staff are scoped to their own store automatically.
+    // Staff are scoped to their own store, plus any store that has approved a
+    // link letting this workstation help run its orders. The businessId filter
+    // above would exclude those (a linked store usually belongs to another
+    // business), so it is relaxed to "my business OR a store I may help".
     if (actor.sub_type === 'staff' && actor.storeId) {
-      qb.andWhere('o.storeId = :scopedStore', { scopedStore: actor.storeId });
+      const storeIds = await this.storeLinks.accessibleStoreIds(actor.storeId);
+      qb.andWhere('o.storeId IN (:...visibleStores)', { visibleStores: storeIds });
+    }
+    // An online order sits at INITIATED while the customer is still inside the
+    // Paystack popup. It must not appear on any workstation surface until the
+    // money actually landed — otherwise the counter sees (and can accept) an
+    // order that may never be paid. Merchant-dashboard listings are unfiltered
+    // so the owner can still see abandoned attempts.
+    if (actor.sub_type === 'staff') {
+      // IS DISTINCT FROM, not <>: paymentChannel is NULL on counter orders, and
+      // `NULL <> 'paystack'` is NULL rather than true — which silently hid every
+      // unpaid counter order from the workstation, not just the online ones.
+      qb.andWhere(
+        "(o.paymentStatus = 'paid' OR o.paymentChannel IS DISTINCT FROM 'paystack' OR o.status <> :initiated)",
+        { initiated: OrderStatus.INITIATED },
+      );
     }
     if (filter.staffId) qb.andWhere('o.staffId = :staffId', { staffId: filter.staffId });
     if (filter.customerId) qb.andWhere('o.customerId = :customerId', { customerId: filter.customerId });
@@ -1062,11 +1089,17 @@ export class OrdersService {
       relations: ['items'],
     });
     if (!order) throw new NotFoundException(`Order ${id} not found`);
+    if (actor.sub_type === 'staff' && actor.storeId) {
+      // A workstation may also work orders for stores that approved a link, so
+      // the check is "one of my visible stores" rather than "my business".
+      const storeIds = await this.storeLinks.accessibleStoreIds(actor.storeId);
+      if (!storeIds.includes(order.storeId)) {
+        throw new ForbiddenException('Order belongs to another store');
+      }
+      return order;
+    }
     if (order.businessId !== actor.businessId) {
       throw new ForbiddenException('Order belongs to another business');
-    }
-    if (actor.sub_type === 'staff' && actor.storeId && order.storeId !== actor.storeId) {
-      throw new ForbiddenException('Order belongs to another store');
     }
     return order;
   }
@@ -1083,7 +1116,14 @@ export class OrdersService {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
 
-    const todayQb = qb.clone().andWhere('o.createdAt >= :today', { today: startOfToday });
+    // Cancelled orders (and payments that failed) are not business the store
+    // did — counting them inflated both today's order count and today's
+    // revenue. They stay visible in the orders list, just out of the stats.
+    const todayQb = qb
+      .clone()
+      .andWhere('o.createdAt >= :today', { today: startOfToday })
+      .andWhere('o.status <> :cancelled', { cancelled: OrderStatus.CANCELLED })
+      .andWhere("o.paymentStatus <> 'failed'");
 
     const [todayCount, todayRevenueRow, pendingCount, preparingCount, readyCount] = await Promise.all([
       todayQb.clone().getCount(),
@@ -1241,19 +1281,37 @@ export class OrdersService {
     toStatus: OrderStatus,
     reason: string | null,
   ): Promise<void> {
-    if (!order.externalReference || order.channel !== 'chowdeck') return;
-    try {
-      await this.chowdeck.pushStatus({
-        storeId: order.storeId,
-        externalReference: order.externalReference,
-        fromStatus,
-        toStatus,
-        reason,
-      });
-    } catch (err) {
-      this.logger.warn(
-        `Chowdeck status push failed for order ${order.orderNumber}: ${(err as Error).message}`,
-      );
+    if (!order.externalReference) return;
+
+    if (order.channel === 'chowdeck') {
+      try {
+        await this.chowdeck.pushStatus({
+          storeId: order.storeId,
+          externalReference: order.externalReference,
+          fromStatus,
+          toStatus,
+          reason,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Chowdeck status push failed for order ${order.orderNumber}: ${(err as Error).message}`,
+        );
+      }
+      return;
+    }
+
+    if (order.channel === 'clove') {
+      try {
+        await this.clove.pushStatus({
+          storeId: order.storeId,
+          externalReference: order.externalReference,
+          toStatus,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Cloove status push failed for order ${order.orderNumber}: ${(err as Error).message}`,
+        );
+      }
     }
   }
 

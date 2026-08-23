@@ -10,14 +10,19 @@ import {
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
- * A store's Chowdeck storefront.
+ * A Chowdeck storefront ("channel") a store sells through.
  *
  * Scoped to the store, not the business: a Chowdeck `merchantReference`
  * identifies one vendor location, so each branch that sells on Chowdeck has
  * its own credentials and its own menu.
+ *
+ * A store may hold **several** channels — one restaurant unit often lists the
+ * same kitchen under more than one Chowdeck vendor (different brands or
+ * catchment areas). The natural key is therefore the merchant reference within
+ * the store, not the store alone.
  */
 @Entity('chowdeck_integrations')
-@Unique(['storeId'])
+@Unique(['storeId', 'merchantReference'])
 export class ChowdeckIntegrationEntity {
   @ApiProperty({ format: 'uuid' })
   @PrimaryGeneratedColumn('uuid')
@@ -31,6 +36,16 @@ export class ChowdeckIntegrationEntity {
   @ApiProperty({ format: 'uuid' })
   @Column({ type: 'uuid' })
   storeId: string;
+
+  @ApiPropertyOptional({
+    example: 'Lekki storefront',
+    nullable: true,
+    description:
+      'Merchant-facing name for this channel. Only needed to tell several ' +
+      'channels on the same store apart.',
+  })
+  @Column({ type: 'varchar', nullable: true })
+  label: string | null;
 
   @ApiProperty({
     example: 'ref_5ed0f23195c0fcd3da6b1fded5353974',

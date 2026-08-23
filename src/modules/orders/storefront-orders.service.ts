@@ -109,6 +109,8 @@ export class StorefrontOrdersService {
     private readonly comboRepo: Repository<ComboEntity>,
     @InjectRepository(WorkstationSettingsEntity)
     private readonly workstationSettingsRepo: Repository<WorkstationSettingsEntity>,
+    @InjectRepository(OrderStatusEventEntity)
+    private readonly statusEventRepo: Repository<OrderStatusEventEntity>,
     @InjectRepository(DeliveryRegionEntity)
     private readonly deliveryRegionRepo: Repository<DeliveryRegionEntity>,
     private readonly dataSource: DataSource,
@@ -338,9 +340,18 @@ export class StorefrontOrdersService {
             where: { businessId: user.businessId },
           })
         )?.autoAcceptOrders ?? false;
-      const statusChain: OrderStatus[] = autoAccept
-        ? [OrderStatus.INITIATED, OrderStatus.PENDING]
-        : [OrderStatus.INITIATED];
+      // An order still awaiting an online charge must NOT be accepted yet, no
+      // matter what auto-accept says: the Paystack popup opens after this
+      // commit, so accepting here put an uncharged order on the counter the
+      // instant the customer clicked "Pay" — and left it there if they closed
+      // the popup. Payment success (markOrderPaid) performs the acceptance
+      // instead; failure/cancel voids the order.
+      const awaitingOnlinePayment =
+        dto.paymentChannel === 'paystack' && total > 0;
+      const statusChain: OrderStatus[] =
+        autoAccept && !awaitingOnlinePayment
+          ? [OrderStatus.INITIATED, OrderStatus.PENDING]
+          : [OrderStatus.INITIATED];
       const initialStatus = statusChain[statusChain.length - 1];
 
       const orderNumber = await this.nextOrderNumber(mgr, dto.storeId);
@@ -653,6 +664,38 @@ export class StorefrontOrdersService {
     await this.markOrderPaid(order.id, reference);
   }
 
+  /**
+   * Advances a just-paid order from INITIATED to PENDING when the merchant has
+   * auto-accept on, recording the status event so the timeline matches what a
+   * cashier-accepted order looks like. With auto-accept off the order stays
+   * INITIATED and waits for the cashier — which is the point: either way it
+   * only reaches the counter once the money actually arrived.
+   */
+  private async acceptOnPaymentIfAutoAccept(
+    order: OrderEntity,
+  ): Promise<void> {
+    if (order.status !== OrderStatus.INITIATED) return;
+    const autoAccept =
+      (
+        await this.workstationSettingsRepo.findOne({
+          where: { businessId: order.businessId },
+        })
+      )?.autoAcceptOrders ?? false;
+    if (!autoAccept) return;
+
+    order.status = OrderStatus.PENDING;
+    await this.orderRepo.save(order);
+    await this.statusEventRepo.save(
+      this.statusEventRepo.create({
+        orderId: order.id,
+        fromStatus: OrderStatus.INITIATED,
+        toStatus: OrderStatus.PENDING,
+        actorId: order.customerId ?? null,
+        actorType: 'user',
+      }),
+    );
+  }
+
   private async markOrderPaid(orderId: string, reference: string): Promise<void> {
     const order = await this.orderRepo.findOne({ where: { id: orderId } });
     if (!order) return;
@@ -665,6 +708,12 @@ export class StorefrontOrdersService {
     order.paidAt = new Date();
     order.paidAmount = total;
     await this.orderRepo.save(order);
+
+    // Acceptance is deferred to here for online payments (see the status-chain
+    // note in placeOrder): the order was held at INITIATED while the customer
+    // was in the Paystack popup, so this is the first moment auto-accept may
+    // legitimately advance it to PENDING and put it on the counter.
+    await this.acceptOnPaymentIfAutoAccept(order);
 
     if (delta > 0) {
       await this.ledger.record({

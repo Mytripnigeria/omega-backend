@@ -21,6 +21,7 @@ import {
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { BusinessId } from '../../common/decorators/business-id.decorator';
 import { ChowdeckService } from './chowdeck.service';
+import { ChowdeckIngestService } from './chowdeck-ingest.service';
 import { UpsertChowdeckIntegrationDto } from './dto/chowdeck-integration.dto';
 
 /**
@@ -34,6 +35,7 @@ import { UpsertChowdeckIntegrationDto } from './dto/chowdeck-integration.dto';
 export class ChowdeckController {
   constructor(
     private readonly service: ChowdeckService,
+    private readonly ingest: ChowdeckIngestService,
     private readonly config: ConfigService,
   ) {}
 
@@ -56,6 +58,138 @@ export class ChowdeckController {
         this.publicBase(),
       ),
     };
+  }
+
+  @ApiOperation({
+    summary: "Every Chowdeck channel on a store",
+    description:
+      'A store can sell through more than one Chowdeck vendor listing — one ' +
+      'kitchen often appears under several brands. Each channel has its own ' +
+      'credentials, menu map and webhook URL.',
+  })
+  @ApiParam({ name: 'storeId', format: 'uuid' })
+  @Get(':storeId/channels')
+  async channels(
+    @BusinessId() businessId: string,
+    @Param('storeId') storeId: string,
+  ) {
+    const rows = await this.service.listChannels(businessId, storeId);
+    return Promise.all(
+      rows.map(async (c) => ({
+        ...c,
+        webhookUrl: await this.service.webhookUrl(
+          businessId,
+          storeId,
+          this.publicBase(),
+          c.id,
+        ),
+      })),
+    );
+  }
+
+  @ApiOperation({ summary: 'Add a Chowdeck channel to a store' })
+  @ApiParam({ name: 'storeId', format: 'uuid' })
+  @Post(':storeId/channels')
+  async addChannel(
+    @BusinessId() businessId: string,
+    @Param('storeId') storeId: string,
+    @Body() dto: UpsertChowdeckIntegrationDto,
+  ) {
+    const saved = await this.service.upsertConfig(businessId, storeId, dto);
+    return {
+      ...saved,
+      webhookUrl: await this.service.webhookUrl(
+        businessId,
+        storeId,
+        this.publicBase(),
+        saved.id,
+      ),
+    };
+  }
+
+  @ApiOperation({ summary: 'Update one Chowdeck channel' })
+  @ApiParam({ name: 'storeId', format: 'uuid' })
+  @ApiParam({ name: 'channelId', format: 'uuid' })
+  @Put(':storeId/channels/:channelId')
+  async updateChannel(
+    @BusinessId() businessId: string,
+    @Param('storeId') storeId: string,
+    @Param('channelId') channelId: string,
+    @Body() dto: UpsertChowdeckIntegrationDto,
+  ) {
+    const saved = await this.service.upsertConfig(
+      businessId,
+      storeId,
+      dto,
+      channelId,
+    );
+    return {
+      ...saved,
+      webhookUrl: await this.service.webhookUrl(
+        businessId,
+        storeId,
+        this.publicBase(),
+        saved.id,
+      ),
+    };
+  }
+
+  @ApiOperation({ summary: 'Check one channel’s credentials' })
+  @Post(':storeId/channels/:channelId/test')
+  @HttpCode(HttpStatus.OK)
+  testChannel(
+    @BusinessId() businessId: string,
+    @Param('storeId') storeId: string,
+    @Param('channelId') channelId: string,
+  ) {
+    return this.service.testConnection(businessId, storeId, channelId);
+  }
+
+  @ApiOperation({ summary: 'Publish the store menu to one channel' })
+  @Post(':storeId/channels/:channelId/sync-menu')
+  @HttpCode(HttpStatus.OK)
+  syncChannelMenu(
+    @BusinessId() businessId: string,
+    @Param('storeId') storeId: string,
+    @Param('channelId') channelId: string,
+  ) {
+    return this.service.syncMenu(businessId, storeId, channelId);
+  }
+
+  @ApiOperation({
+    summary: 'Send a test order through this channel',
+    description:
+      "Chowdeck's sandbox cannot create an order against your own vendor, so " +
+      'this injects a realistic one through the same path a live order takes. ' +
+      'It lands in the counter POS (and the kitchen) exactly like the real ' +
+      'thing, and deducts stock, so the workstation flow can be rehearsed ' +
+      'before going live. Publish the menu first — the order is built from ' +
+      'products actually mapped to this channel.',
+  })
+  @Post(':storeId/channels/:channelId/test-order')
+  @HttpCode(HttpStatus.OK)
+  async testOrder(
+    @BusinessId() businessId: string,
+    @Param('storeId') storeId: string,
+    @Param('channelId') channelId: string,
+  ) {
+    const integration = await this.service.requireChannel(
+      businessId,
+      storeId,
+      channelId,
+    );
+    return this.ingest.simulateIncomingOrder(integration);
+  }
+
+  @ApiOperation({ summary: 'Remove one Chowdeck channel' })
+  @Delete(':storeId/channels/:channelId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  removeChannel(
+    @BusinessId() businessId: string,
+    @Param('storeId') storeId: string,
+    @Param('channelId') channelId: string,
+  ) {
+    return this.service.removeConfig(businessId, storeId, channelId);
   }
 
   @ApiOperation({

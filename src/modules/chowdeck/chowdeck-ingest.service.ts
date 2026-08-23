@@ -146,6 +146,62 @@ export class ChowdeckIngestService {
   }
 
   /** ORDER_CREATED → a local order sitting in the POS, already paid. */
+  /**
+   * Injects a synthetic Chowdeck order through the real ingest path.
+   *
+   * Chowdeck's sandbox has no way for a merchant to create an order against
+   * their own vendor (`POST /order` 404s), and the webhook authenticates by
+   * calling Chowdeck back — so a merchant genuinely could not rehearse
+   * "an order arrives and my workstation handles it" before going live.
+   * This is that rehearsal: it is an authenticated merchant action scoped to
+   * their own store, so it needs no webhook trust, and it exercises exactly the
+   * same ingest → POS → kitchen path a real order takes.
+   *
+   * Lines are drawn from products already mapped to this channel, so stock
+   * deduction and the menu-id map are exercised too, not stubbed.
+   */
+  async simulateIncomingOrder(
+    integration: ChowdeckIntegrationEntity,
+    opts?: { reference?: string },
+  ) {
+    const mapped = await this.chowdeck.mappedMenuItems(integration.id, 2);
+    if (mapped.length === 0) {
+      throw new BadRequestException(
+        'Publish this channel\'s menu to Chowdeck first — a test order is ' +
+          'built from products that are actually mapped.',
+      );
+    }
+    const reference =
+      opts?.reference ?? `TEST-${Date.now().toString(36).toUpperCase()}`;
+
+    const items = mapped.map((m, i) => ({
+      id: Number(m.chowdeckMenuId),
+      quantity: i === 0 ? 2 : 1,
+      price_per_quantity: 0,
+      description: m.name,
+    }));
+
+    const order: ChowdeckOrder = {
+      id: Date.now() % 2_000_000_000,
+      reference,
+      status: 'order_placed',
+      total_price: 0,
+      currency: 'NGN',
+      source: 'chowdeck-test',
+      created_at: new Date().toISOString(),
+      customer: {
+        first_name: 'Chowdeck',
+        last_name: 'Test',
+        email: null,
+        phone: null,
+      },
+      items,
+      vendor_information: { name: integration.label ?? 'Chowdeck' },
+    };
+
+    return this.ingestOrder(integration, order);
+  }
+
   private async ingestOrder(
     integration: ChowdeckIntegrationEntity,
     chowdeckOrder: ChowdeckOrder,
@@ -166,7 +222,7 @@ export class ChowdeckIngestService {
       };
     }
 
-    const lines = await this.resolveLines(integration.storeId, chowdeckOrder);
+    const lines = await this.resolveLines(integration, chowdeckOrder);
     if (lines.length === 0) {
       throw new BadRequestException(
         `Chowdeck order ${reference} has no resolvable items`,
@@ -287,7 +343,11 @@ export class ChowdeckIngestService {
    * order rather than silently short-making it. Such a line simply doesn't
    * deduct stock.
    */
-  private async resolveLines(storeId: string, chowdeckOrder: ChowdeckOrder) {
+  private async resolveLines(
+    integration: ChowdeckIntegrationEntity,
+    chowdeckOrder: ChowdeckOrder,
+  ) {
+    const storeId = integration.storeId;
     const items = chowdeckOrder.items ?? [];
     const lines: Array<{
       productId?: string;
@@ -300,7 +360,12 @@ export class ChowdeckIngestService {
       const quantity = Number(item.quantity) || 0;
       if (quantity <= 0) continue;
 
-      let productId = await this.chowdeck.productIdForMenuId(storeId, item.id);
+      // Scoped to the channel: the same product carries a different numeric
+      // menu id on each Chowdeck vendor listing this store sells through.
+      let productId = await this.chowdeck.productIdForMenuId(
+        integration.id,
+        item.id,
+      );
       let name = item.description ?? `Chowdeck item ${item.id}`;
 
       if (!productId && item.description) {

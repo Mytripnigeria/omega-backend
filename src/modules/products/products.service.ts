@@ -159,31 +159,43 @@ export class ProductsService {
     return this.findOne(saved.id);
   }
 
-  async findAll(query: FilterProductDto): Promise<PaginatedResponseDto<ProductResponseDto>> {
+  /**
+   * `businessId` is the tenancy boundary and is not optional in practice: the
+   * list was previously scoped only by the caller-supplied `storeId`, so a
+   * request that simply omitted it returned **every business's** products.
+   * Products carry no businessId of their own, so tenancy comes from the store
+   * — joined with a cast, because products.storeId is a varchar while
+   * stores.id is a uuid (comparing them directly raises 42883).
+   */
+  async findAll(
+    query: FilterProductDto,
+    businessId?: string,
+  ): Promise<PaginatedResponseDto<ProductResponseDto>> {
     const { page = 1, limit = 20, storeId, categoryId, status, search } = query;
-    const where: FindOptionsWhere<ProductEntity> = {};
 
-    if (storeId) where.storeId = storeId;
-    if (categoryId) where.categoryId = categoryId;
-    if (status !== undefined) where.status = status;
-    if (search) where.name = Like(`%${search}%`);
+    const qb = this.productRepo
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.variations', 'variations')
+      .leftJoinAndSelect('p.productIngredients', 'productIngredients')
+      .leftJoinAndSelect('productIngredients.ingredient', 'ingredient')
+      .leftJoinAndSelect('p.addonGroups', 'addonGroups')
+      .leftJoinAndSelect('addonGroups.addons', 'addons')
+      .orderBy('p.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
 
-    // Load relations on the list endpoint too — the merchant-hub Products
-    // page needs variations, ingredients, and addon groups when opening the
-    // edit sheet for a row. Without them the form fields show empty.
-    const [data, total] = await this.productRepo.findAndCount({
-      where,
-      relations: [
-        'variations',
-        'productIngredients',
-        'productIngredients.ingredient',
-        'addonGroups',
-        'addonGroups.addons',
-      ],
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    if (businessId) {
+      qb.innerJoin('stores', 's', 's.id::text = p.storeId').andWhere(
+        's.businessId = :businessId',
+        { businessId },
+      );
+    }
+    if (storeId) qb.andWhere('p.storeId = :storeId', { storeId });
+    if (categoryId) qb.andWhere('p.categoryId = :categoryId', { categoryId });
+    if (status !== undefined) qb.andWhere('p.status = :status', { status });
+    if (search) qb.andWhere('p.name ILIKE :search', { search: `%${search}%` });
+
+    const [data, total] = await qb.getManyAndCount();
 
     const withNames = await this.attachCategoryNames(data);
     return paginate(withNames, total, page, limit, ProductResponseDto.from);

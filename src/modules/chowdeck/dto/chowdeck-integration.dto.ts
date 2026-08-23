@@ -3,6 +3,15 @@ import { IsBoolean, IsOptional, IsString, IsUrl } from 'class-validator';
 
 export class UpsertChowdeckIntegrationDto {
   @ApiPropertyOptional({
+    example: 'Lekki storefront',
+    description:
+      'Merchant-facing name, to tell several channels on one store apart.',
+  })
+  @IsOptional()
+  @IsString()
+  label?: string;
+
+  @ApiPropertyOptional({
     example: 'ref_5ed0f23195c0fcd3da6b1fded5353974',
     description: "Chowdeck's reference for this vendor location.",
   })

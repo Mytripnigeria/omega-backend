@@ -1,5 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { StoreLinksModule } from '../store-links/store-links.module';
+import { CloveModule } from '../clove/clove.module';
 import { OrderEntity } from './entities/order.entity';
 import { DeliveryRegionEntity } from '../delivery-regions/entities/delivery-region.entity';
 import { ComboItemEntity } from '../combos/entities/combo-item.entity';
@@ -44,6 +46,8 @@ import { ChowdeckModule } from '../chowdeck/chowdeck.module';
 
 @Module({
   imports: [
+    StoreLinksModule,
+    forwardRef(() => CloveModule),
     forwardRef(() => ChowdeckModule),
     TypeOrmModule.forFeature([
       OrderEntity,

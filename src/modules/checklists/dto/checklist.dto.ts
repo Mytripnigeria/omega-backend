@@ -152,6 +152,22 @@ export class ChecklistFilterDto extends PaginationQueryDto {
   staffId?: string;
 }
 
+/**
+ * Which period's performance to report. Omitted = the period in progress now,
+ * which is what the endpoint always used to answer. `date` names any day; the
+ * period it falls in is derived from the checklist's own frequency, so a daily
+ * checklist reports that day and a weekly one reports that day's week.
+ */
+export class ChecklistPerformanceQueryDto {
+  @ApiPropertyOptional({
+    example: '2026-08-18',
+    description: 'Any date inside the period to report (YYYY-MM-DD).',
+  })
+  @IsOptional()
+  @IsDateString()
+  date?: string;
+}
+
 export class ChecklistResponseDto {
   @ApiProperty({ format: 'uuid' })
   @Expose()

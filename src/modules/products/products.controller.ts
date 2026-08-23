@@ -1,16 +1,17 @@
 import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Put,
-  Delete,
   Body,
-  Param,
-  Query,
-  UseGuards,
+  Controller,
+  Delete,
+  Get,
   HttpCode,
   HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -23,6 +24,7 @@ import {
   ApiQuery,
   ApiBody,
 } from '@nestjs/swagger';
+import { Request } from 'express';
 import { ProductsService } from './products.service';
 import { CreateProductDto, CreateVariationDto } from './dto/create-product.dto';
 import {
@@ -72,8 +74,12 @@ export class ProductsController {
     },
   })
   @Get()
-  findAll(@Query() query: FilterProductDto) {
-    return this.productsService.findAll(query);
+  findAll(@Query() query: FilterProductDto, @Req() req: Request) {
+    // Not the @BusinessId() decorator: that one is admin-only and 403s a
+    // workstation token, and the POS reads this endpoint too. Both token types
+    // carry businessId, which is all the tenancy filter needs.
+    const user = (req as Request & { user?: { businessId?: string } }).user;
+    return this.productsService.findAll(query, user?.businessId);
   }
 
   @ApiOperation({ summary: 'Product statistics', description: 'Returns counts of total, active, and inactive products.' })

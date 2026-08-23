@@ -346,6 +346,12 @@ export class ChecklistsService {
   async getPerformances(
     actor: ActorContext,
     checklistId: string,
+    /**
+     * Any date inside the period to report. Omitted = the period in progress.
+     * Lets the merchant look back at "how did the team fill the daily opening
+     * checklist last Tuesday", instead of only ever seeing today.
+     */
+    date?: string,
   ): Promise<
     Array<{
       staffId: string;
@@ -359,7 +365,15 @@ export class ChecklistsService {
   > {
     const checklist = await this.findEntity(actor.businessId, checklistId);
     const total = (checklist.items ?? []).length;
-    const periodKey = this.periodKey(checklist.frequency);
+    // `date` is a plain YYYY-MM-DD calendar day; parse it as *local* midday so
+    // the period it lands in can't be dragged into the previous day by the
+    // UTC offset (Lagos is UTC+1).
+    let asOf = new Date();
+    if (date) {
+      const [y, m, d] = date.split('-').map(Number);
+      if (y && m && d) asOf = new Date(y, m - 1, d, 12, 0, 0, 0);
+    }
+    const periodKey = this.periodKey(checklist.frequency, asOf);
 
     // Resolve the set of assignee staff.
     const qb = this.staffRepo

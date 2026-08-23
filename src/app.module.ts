@@ -61,6 +61,8 @@ import { ReferralsModule } from './modules/referrals/referrals.module';
 import { MerchantWalletModule } from './modules/merchant-wallet/merchant-wallet.module';
 import { PayoutsModule } from './modules/payouts/payouts.module';
 import { DashboardPermissionsInterceptor } from './common/interceptors/dashboard-permissions.interceptor';
+import { CloveModule } from './modules/clove/clove.module';
+import { StoreLinksModule } from './modules/store-links/store-links.module';
 import { ChowdeckModule } from './modules/chowdeck/chowdeck.module';
 
 @Module({
@@ -111,6 +113,8 @@ import { ChowdeckModule } from './modules/chowdeck/chowdeck.module';
     ActivityLogModule,
     OrdersModule,
     ChowdeckModule,
+    StoreLinksModule,
+    CloveModule,
     DeliveriesModule,
     ExpensesModule,
     ReportsModule,

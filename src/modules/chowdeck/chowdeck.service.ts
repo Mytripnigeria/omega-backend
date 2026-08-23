@@ -55,6 +55,7 @@ export class ChowdeckService {
         businessId: true,
         storeId: true,
         merchantReference: true,
+        label: true,
         secretKey: true,
         baseUrl: true,
         isEnabled: true,
@@ -73,6 +74,7 @@ export class ChowdeckService {
         businessId: true,
         storeId: true,
         merchantReference: true,
+        label: true,
         secretKey: true,
         baseUrl: true,
         isEnabled: true,
@@ -95,6 +97,7 @@ export class ChowdeckService {
     return {
       id: integration.id,
       storeId: integration.storeId,
+      label: integration.label ?? null,
       merchantReference: integration.merchantReference,
       baseUrl: integration.baseUrl,
       isEnabled: integration.isEnabled,
@@ -105,27 +108,52 @@ export class ChowdeckService {
     };
   }
 
+  /**
+   * Every Chowdeck channel on a store. A store may sell through more than one
+   * vendor listing, so this is a list rather than a single row.
+   */
+  async listChannels(businessId: string, storeId: string) {
+    const rows = await this.integrationRepo.find({
+      where: { businessId, storeId },
+      order: { createdAt: 'ASC' },
+    });
+    const withSecrets = await Promise.all(
+      rows.map(async (r) => {
+        const s = await this.findWithSecret({ id: r.id });
+        return this.present(r, s?.secretKey);
+      }),
+    );
+    return withSecrets;
+  }
+
+  /** Back-compat single-channel read: the first channel on the store. */
   async getConfig(businessId: string, storeId: string) {
-    const row = await this.findWithSecret({ storeId });
-    if (!row || row.businessId !== businessId) return null;
-    const full = await this.integrationRepo.findOne({ where: { id: row.id } });
-    return this.present(full ?? row, row.secretKey);
+    const [first] = await this.listChannels(businessId, storeId);
+    return first ?? null;
   }
 
   async upsertConfig(
     businessId: string,
     storeId: string,
     dto: UpsertChowdeckIntegrationDto,
+    channelId?: string,
   ) {
     const store = await this.storeRepo.findOne({ where: { id: storeId } });
     if (!store || store.businessId !== businessId) {
       throw new NotFoundException('Store not found');
     }
 
-    const existing = await this.findWithSecret({ storeId });
+    // `channelId` selects which of the store's channels to edit. Without one
+    // this is a new channel — a store may hold several.
+    const existing = channelId
+      ? await this.findWithSecret({ id: channelId })
+      : null;
+    if (channelId && (!existing || existing.storeId !== storeId)) {
+      throw new NotFoundException('Chowdeck channel not found on this store');
+    }
     if (!existing && !dto.secretKey) {
       throw new BadRequestException(
-        'A Chowdeck secret key is required the first time you connect a store',
+        'A Chowdeck secret key is required the first time you connect a channel',
       );
     }
 
@@ -135,6 +163,7 @@ export class ChowdeckService {
     if (dto.merchantReference !== undefined) {
       entity.merchantReference = dto.merchantReference.trim();
     }
+    if (dto.label !== undefined) entity.label = dto.label?.trim() || null;
     // Omitting the key on an update keeps the stored one — the hub only ever
     // sees a masked preview, so it cannot echo the real value back.
     if (dto.secretKey) entity.secretKey = dto.secretKey.trim();
@@ -149,12 +178,18 @@ export class ChowdeckService {
     return this.present(saved, entity.secretKey);
   }
 
-  async removeConfig(businessId: string, storeId: string): Promise<void> {
-    const existing = await this.findWithSecret({ storeId });
-    if (!existing || existing.businessId !== businessId) {
-      throw new NotFoundException('This store is not connected to Chowdeck');
-    }
-    await this.menuMapRepo.delete({ storeId });
+  async removeConfig(
+    businessId: string,
+    storeId: string,
+    channelId?: string,
+  ): Promise<void> {
+    const existing = await this.requireIntegration(
+      businessId,
+      storeId,
+      channelId,
+    );
+    // Only this channel's mappings — the store's other channels keep theirs.
+    await this.menuMapRepo.delete({ integrationId: existing.id });
     await this.integrationRepo.delete({ id: existing.id });
   }
 
@@ -163,8 +198,14 @@ export class ChowdeckService {
     businessId: string,
     storeId: string,
     publicBase: string,
+    channelId?: string,
   ): Promise<string | null> {
-    const row = await this.findWithSecret({ storeId });
+    let row: ChowdeckIntegrationEntity | null;
+    try {
+      row = await this.requireIntegration(businessId, storeId, channelId);
+    } catch {
+      return null;
+    }
     if (!row || row.businessId !== businessId) return null;
     const base = publicBase.replace(/\/+$/, '');
     return row.webhookToken
@@ -172,36 +213,87 @@ export class ChowdeckService {
       : `${base}/webhook/chowdeck`;
   }
 
-  async testConnection(businessId: string, storeId: string) {
-    const integration = await this.requireIntegration(businessId, storeId);
+  async testConnection(businessId: string, storeId: string, channelId?: string) {
+    const integration = await this.requireIntegration(
+      businessId,
+      storeId,
+      channelId,
+    );
     const result = await this.client.ping(this.credentialsOf(integration));
     return { ok: true, ...result };
+  }
+
+  /**
+   * Resolves one channel. With no `channelId` the store's only channel is used;
+   * if it has several the caller must say which, rather than us silently
+   * picking one and publishing a menu to the wrong Chowdeck vendor.
+   */
+  /** Public alias used by the controller's test-order action. */
+  async requireChannel(
+    businessId: string,
+    storeId: string,
+    channelId?: string,
+  ): Promise<ChowdeckIntegrationEntity> {
+    return this.requireIntegration(businessId, storeId, channelId);
   }
 
   private async requireIntegration(
     businessId: string,
     storeId: string,
+    channelId?: string,
   ): Promise<ChowdeckIntegrationEntity> {
-    const integration = await this.findWithSecret({ storeId });
-    if (!integration || integration.businessId !== businessId) {
+    if (channelId) {
+      const one = await this.findWithSecret({ id: channelId });
+      if (!one || one.businessId !== businessId || one.storeId !== storeId) {
+        throw new NotFoundException('Chowdeck channel not found on this store');
+      }
+      return one;
+    }
+    const rows = await this.integrationRepo.find({
+      where: { businessId, storeId },
+      select: { id: true },
+      order: { createdAt: 'ASC' },
+    });
+    if (rows.length === 0) {
       throw new NotFoundException('This store is not connected to Chowdeck');
     }
-    return integration;
+    if (rows.length > 1) {
+      throw new BadRequestException(
+        'This store has several Chowdeck channels — specify which one.',
+      );
+    }
+    const only = await this.findWithSecret({ id: rows[0].id });
+    if (!only) throw new NotFoundException('This store is not connected to Chowdeck');
+    return only;
   }
 
   // ───────────────────────── menu sync ─────────────────────────
 
   /**
-   * Pushes the store's products to Chowdeck and rebuilds the id map.
+   * Publishes the store's whole menu to Chowdeck and rebuilds the id map.
    *
-   * Two passes on purpose: the bulk upload is keyed by *our* reference (the
-   * product id) and only echoes back the references it accepted, while order
-   * webhooks quote Chowdeck's numeric menu id. Reading `GET /menu` afterwards
-   * is the only way to learn that id, so the map is always derived from what
-   * Chowdeck actually holds rather than from what we hoped it stored.
+   * **`/menu/bulk-upload` REPLACES the merchant's entire Chowdeck menu with the
+   * payload** — verified against the live sandbox: uploading one item left that
+   * merchant holding exactly one item, and the fifteen that were there before
+   * were gone. It is not the "create" the docs imply.
+   *
+   * So the whole catalogue goes in one call, every time. An earlier design
+   * split items into create-vs-update batches based on what Chowdeck already
+   * held; that was actively dangerous — the upload half wiped the menu and the
+   * update half then failed with "Menu not found" against rows it had just
+   * destroyed. Sending everything at once is both simpler and the only
+   * non-destructive shape available.
+   *
+   * The id map still has to be read back afterwards: the upload only echoes the
+   * references it accepted, while order webhooks quote Chowdeck's numeric menu
+   * id, and `GET /menu` is the only place both appear.
    */
-  async syncMenu(businessId: string, storeId: string) {
-    const integration = await this.requireIntegration(businessId, storeId);
+  async syncMenu(businessId: string, storeId: string, channelId?: string) {
+    const integration = await this.requireIntegration(
+      businessId,
+      storeId,
+      channelId,
+    );
     const creds = this.credentialsOf(integration);
 
     const products = await this.productRepo.find({
@@ -242,52 +334,27 @@ export class ChowdeckService {
       };
     });
 
-    // Split by what Chowdeck already holds. Re-uploading an existing reference
-    // has undefined semantics (their bulk-upload is documented as a create), so
-    // known items go through bulk-update instead — that's what makes a second
-    // publish a correction rather than a gamble.
+    // What Chowdeck holds *before* this publish, purely so the merchant can be
+    // told what the replace removed.
     const live = await this.client.listMenu(creds);
     const liveReferences = new Set(
-      (live ?? [])
-        .map((m) => m.reference)
-        .filter((r): r is string => !!r),
+      (live ?? []).map((m) => m.reference).filter((r): r is string => !!r),
     );
-    const toCreate = items.filter((i) => !liveReferences.has(i.reference));
-    const toUpdate = items.filter((i) => liveReferences.has(i.reference));
+    const ourReferences = new Set(items.map((i) => i.reference));
+    const replaced = (live ?? [])
+      .filter((m) => !m.reference || !ourReferences.has(m.reference))
+      .map((m) => m.name)
+      .filter((n): n is string => !!n);
 
-    let created = 0;
-    if (toCreate.length > 0) {
-      const accepted = await this.client.bulkUploadMenu(creds, toCreate);
-      created = Array.isArray(accepted) ? accepted.length : toCreate.length;
-    }
-
-    let updated = 0;
+    // One call with the complete menu — see the note above: this replaces
+    // whatever was there.
+    const accepted = await this.client.bulkUploadMenu(creds, items);
+    const publishedCount = Array.isArray(accepted) ? accepted.length : items.length;
+    const created = items.filter((i) => !liveReferences.has(i.reference)).length;
+    const updated = publishedCount - created > 0 ? publishedCount - created : 0;
     const updateFailures: string[] = [];
-    if (toUpdate.length > 0) {
-      const result = await this.client.bulkUpdateMenu(
-        creds,
-        toUpdate.map((i) => ({
-          reference: i.reference,
-          name: i.name,
-          description: i.description,
-          price: i.price,
-          in_stock: i.in_stock,
-        })),
-      );
-      // Bulk update answers 200 even when individual rows fail, so the per-item
-      // results are the only truthful signal.
-      for (const row of result?.results ?? []) {
-        if (row.status === 'success') updated += 1;
-        else {
-          const product = products.find((p) => p.id === row.reference);
-          updateFailures.push(
-            `${product?.name ?? row.reference}: ${row.message ?? 'failed'}`,
-          );
-        }
-      }
-    }
 
-    const map = await this.rebuildMenuMap(storeId, creds);
+    const map = await this.rebuildMenuMap(integration, creds);
 
     integration.lastMenuSyncAt = new Date();
     await this.integrationRepo.update(
@@ -297,6 +364,12 @@ export class ChowdeckService {
 
     return {
       published: items.length,
+      /**
+       * Items that were on the Chowdeck menu before this publish and are not in
+       * our catalogue — the replace removed them. Surfaced so a merchant can
+       * see immediately if they have just wiped something.
+       */
+      replacedItems: replaced,
       created,
       updated,
       updateFailures,
@@ -346,7 +419,11 @@ export class ChowdeckService {
    * directly in Chowdeck's dashboard (no reference, or an unknown one) are
    * reported as unmapped rather than guessed at.
    */
-  async rebuildMenuMap(storeId: string, creds: ChowdeckCredentials) {
+  async rebuildMenuMap(
+    integration: ChowdeckIntegrationEntity,
+    creds: ChowdeckCredentials,
+  ) {
+    const storeId = integration.storeId;
     const menu = await this.client.listMenu(creds);
     const ourProductIds = new Set(
       (await this.productRepo.find({ where: { storeId }, select: { id: true } })).map(
@@ -365,26 +442,40 @@ export class ChowdeckService {
       await this.menuMapRepo.upsert(
         {
           storeId,
+          integrationId: integration.id,
           productId: reference,
           chowdeckMenuId: String(entry.id),
           name: entry.name,
         },
-        ['storeId', 'productId'],
+        ['integrationId', 'productId'],
       );
       mapped += 1;
     }
     return { mapped, unmapped };
   }
 
-  /** productId for a Chowdeck menu id, or null when unmapped. */
+  /**
+   * productId for a Chowdeck menu id, or null when unmapped. Scoped to the
+   * channel that received the order: the same product carries a different
+   * numeric id on each Chowdeck vendor listing.
+   */
   async productIdForMenuId(
-    storeId: string,
+    integrationId: string,
     chowdeckMenuId: string | number,
   ): Promise<string | null> {
     const row = await this.menuMapRepo.findOne({
-      where: { storeId, chowdeckMenuId: String(chowdeckMenuId) },
+      where: { integrationId, chowdeckMenuId: String(chowdeckMenuId) },
     });
     return row?.productId ?? null;
+  }
+
+  /** A few products already mapped on this channel, for the test order. */
+  async mappedMenuItems(integrationId: string, limit = 2) {
+    return this.menuMapRepo.find({
+      where: { integrationId },
+      take: limit,
+      order: { createdAt: 'ASC' },
+    });
   }
 
   // ───────────────────────── outbound status sync ─────────────────────────

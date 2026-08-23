@@ -28,6 +28,7 @@ import { JwtPayload } from '../../common/types/jwt-payload.types';
 import { ChecklistsService } from './checklists.service';
 import {
   ChecklistFilterDto,
+  ChecklistPerformanceQueryDto,
   ChecklistResponseDto,
   CreateChecklistDto,
   ToggleChecklistItemDto,
@@ -97,8 +98,12 @@ export class ChecklistsController {
   })
   @ApiParam({ name: 'id', format: 'uuid' })
   @Get(':id/performances')
-  performances(@Req() req: AuthedRequest, @Param('id') id: string) {
-    return this.service.getPerformances(actorFrom(req), id);
+  performances(
+    @Req() req: AuthedRequest,
+    @Param('id') id: string,
+    @Query() query: ChecklistPerformanceQueryDto,
+  ) {
+    return this.service.getPerformances(actorFrom(req), id, query.date);
   }
 
   @ApiOperation({ summary: 'Create a checklist (admin)' })

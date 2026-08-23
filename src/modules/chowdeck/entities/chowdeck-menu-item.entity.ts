@@ -21,9 +21,12 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
  * Populated by the menu sync, which uploads and then reads `GET /menu` back —
  * that response carries both `id` and `reference`.
  */
+// Keyed by the *channel*, not the store: a store can list the same product on
+// several Chowdeck channels, and each one mints its own numeric menu id. Keying
+// by store made those two rows collide, so a second channel could not be mapped.
 @Entity('chowdeck_menu_items')
-@Unique(['storeId', 'chowdeckMenuId'])
-@Unique(['storeId', 'productId'])
+@Unique(['integrationId', 'chowdeckMenuId'])
+@Unique(['integrationId', 'productId'])
 export class ChowdeckMenuItemEntity {
   @ApiProperty({ format: 'uuid' })
   @PrimaryGeneratedColumn('uuid')
@@ -33,6 +36,11 @@ export class ChowdeckMenuItemEntity {
   @Column({ type: 'uuid' })
   @Index()
   storeId: string;
+
+  @ApiProperty({ format: 'uuid', description: 'Chowdeck channel this mapping belongs to.' })
+  @Column({ type: 'uuid' })
+  @Index()
+  integrationId: string;
 
   @ApiProperty({ format: 'uuid', description: 'Our product.' })
   @Column({ type: 'uuid' })
