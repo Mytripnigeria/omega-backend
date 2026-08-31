@@ -145,9 +145,26 @@ export class ChowdeckService {
 
     // `channelId` selects which of the store's channels to edit. Without one
     // this is a new channel — a store may hold several.
-    const existing = channelId
-      ? await this.findWithSecret({ id: channelId })
-      : null;
+    // With no channelId this is the legacy single-config save. It must UPDATE
+    // the store's only channel, not silently create a second one — otherwise
+    // every save from the old form spawned another Chowdeck connection.
+    // Creating is reserved for a store that has none, or an explicit "add".
+    let existing = channelId ? await this.findWithSecret({ id: channelId }) : null;
+    if (!channelId && !dto.createNew) {
+      const rows = await this.integrationRepo.find({
+        where: { businessId, storeId },
+        select: { id: true },
+        order: { createdAt: 'ASC' },
+      });
+      if (rows.length === 1) {
+        existing = await this.findWithSecret({ id: rows[0].id });
+      } else if (rows.length > 1) {
+        throw new BadRequestException(
+          'This store has several Chowdeck channels — choose which one to edit, ' +
+            'or use "Add channel" to connect another.',
+        );
+      }
+    }
     if (channelId && (!existing || existing.storeId !== storeId)) {
       throw new NotFoundException('Chowdeck channel not found on this store');
     }

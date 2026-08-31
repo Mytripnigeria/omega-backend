@@ -108,7 +108,26 @@ export class CloveService {
       throw new NotFoundException('Store not found');
     }
 
-    const existing = channelId ? await this.findWithSecret({ id: channelId }) : null;
+    // With no channelId this is the legacy single-config save. It must UPDATE
+    // the store's only channel, not silently create a second one — otherwise
+    // every save from the old form spawned another Cloove connection.
+    // Creating is reserved for a store that has none, or an explicit "add".
+    let existing = channelId ? await this.findWithSecret({ id: channelId }) : null;
+    if (!channelId && !dto.createNew) {
+      const rows = await this.integrationRepo.find({
+        where: { businessId, storeId },
+        select: { id: true },
+        order: { createdAt: 'ASC' },
+      });
+      if (rows.length === 1) {
+        existing = await this.findWithSecret({ id: rows[0].id });
+      } else if (rows.length > 1) {
+        throw new BadRequestException(
+          'This store has several Cloove channels — choose which one to edit, ' +
+            'or use "Add channel" to connect another.',
+        );
+      }
+    }
     if (channelId && (!existing || existing.storeId !== storeId)) {
       throw new NotFoundException('Cloove channel not found on this store');
     }
@@ -127,7 +146,19 @@ export class CloveService {
     }
     // Omitting the key on an update keeps the stored one — the hub only ever
     // sees a masked preview, so it cannot echo the real value back.
-    if (dto.apiKey) entity.apiKey = dto.apiKey.trim();
+    if (dto.apiKey) {
+      const key = dto.apiKey.trim();
+      // Cloove issues two keys and they look almost identical. The publishable
+      // one is rejected by every API call, which previously only showed up
+      // later as a failed "Test connection" — say so at the point of entry.
+      if (/^clv_(live|test)_pk_/i.test(key)) {
+        throw new BadRequestException(
+          'That is a publishable key (clv_…_pk_…), which the Cloove API rejects. ' +
+            'Use the secret key (clv_…_sk_…) from your Cloove dashboard.',
+        );
+      }
+      entity.apiKey = key;
+    }
     if (dto.baseUrl !== undefined) {
       entity.baseUrl = dto.baseUrl?.trim() || 'https://api.clooveai.com';
     }

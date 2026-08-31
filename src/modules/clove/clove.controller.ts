@@ -52,7 +52,10 @@ export class CloveController {
     @Param('storeId') storeId: string,
     @Body() dto: UpsertCloveIntegrationDto,
   ) {
-    return this.service.upsertConfig(businessId, storeId, dto);
+    return this.service.upsertConfig(businessId, storeId, {
+      ...dto,
+      createNew: true,
+    });
   }
 
   @ApiOperation({ summary: 'Update one Cloove channel' })

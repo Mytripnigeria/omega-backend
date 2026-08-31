@@ -95,7 +95,10 @@ export class ChowdeckController {
     @Param('storeId') storeId: string,
     @Body() dto: UpsertChowdeckIntegrationDto,
   ) {
-    const saved = await this.service.upsertConfig(businessId, storeId, dto);
+    const saved = await this.service.upsertConfig(businessId, storeId, {
+      ...dto,
+      createNew: true,
+    });
     return {
       ...saved,
       webhookUrl: await this.service.webhookUrl(

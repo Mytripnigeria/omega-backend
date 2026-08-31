@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -20,6 +21,8 @@ import { ActivityLogService } from '../activity-log/activity-log.service';
 
 @Injectable()
 export class StoreLinksService {
+  private readonly logger = new Logger(StoreLinksService.name);
+
   constructor(
     @InjectRepository(StoreLinkEntity)
     private readonly repo: Repository<StoreLinkEntity>,
@@ -34,10 +37,28 @@ export class StoreLinksService {
    * visible set. Only APPROVED links count.
    */
   async accessibleStoreIds(storeId: string): Promise<string[]> {
-    const links = await this.repo.find({
-      where: { requesterStoreId: storeId, status: StoreLinkStatus.APPROVED },
-    });
-    return [storeId, ...links.map((l) => l.targetStoreId)];
+    try {
+      const links = await this.repo.find({
+        where: { requesterStoreId: storeId, status: StoreLinkStatus.APPROVED },
+      });
+      return [storeId, ...links.map((l) => l.targetStoreId)];
+    } catch (err) {
+      // This sits on the critical path of every staff order read *and* write
+      // (findAll and findEntity), so it must never be able to stop a cashier
+      // selling. It already has: shipping the code without running its
+      // migration left `store_links` absent, and the resulting error surfaced
+      // as "internal server error" on taking an order, an order list that
+      // would not load, and a Ready button that did nothing.
+      //
+      // Degrade to "just my own store" — exactly the behaviour before store
+      // linking existed — and log loudly instead.
+      this.logger.error(
+        `store_links unavailable (${(err as Error).message}). Falling back to ` +
+          `the workstation's own store — cross-store order help is off until ` +
+          `the pending migration is run.`,
+      );
+      return [storeId];
+    }
   }
 
   private async nameMap(ids: string[]): Promise<Map<string, string>> {

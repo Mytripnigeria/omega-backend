@@ -3,6 +3,15 @@ import { IsBoolean, IsOptional, IsString, IsUrl } from 'class-validator';
 
 export class UpsertChowdeckIntegrationDto {
   @ApiPropertyOptional({
+    description:
+      'Force creation of an additional channel instead of updating the ' +
+      "store's existing one. Set by the hub's \"Add channel\" action.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  createNew?: boolean;
+
+  @ApiPropertyOptional({
     example: 'Lekki storefront',
     description:
       'Merchant-facing name, to tell several channels on one store apart.',

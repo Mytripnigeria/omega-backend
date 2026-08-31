@@ -84,12 +84,30 @@ export interface ClovePage<T> {
   meta?: { total?: number; page?: number; perPage?: number; hasMore?: boolean };
 }
 
-/** Surfaces Cloove's own wording instead of a bare 500. */
+/**
+ * Surfaces Cloove's own wording instead of a bare 500.
+ *
+ * The status matters more than it looks. A 502 is the honest code for "the
+ * upstream broke", but nginx is routinely configured to intercept 5xx and
+ * replace the body with its own error page — which strips the CORS headers, so
+ * the browser cannot read the response and reports a bare **"load failed"**
+ * with no message at all. That is exactly what a merchant saw after entering a
+ * publishable key instead of a secret one: the real answer ("Invalid API key")
+ * never reached them.
+ *
+ * So anything the merchant can actually fix — bad key, bad reference, rejected
+ * payload — comes back as 4xx and keeps its message. 502 is reserved for
+ * genuine upstream outages.
+ */
 export class CloveApiError extends HttpException {
   readonly upstreamStatus: number;
 
   constructor(message: string, upstreamStatus: number) {
-    super(`Cloove: ${message}`, HttpStatus.BAD_GATEWAY);
+    const clientFixable = [400, 401, 403, 404, 409, 422].includes(upstreamStatus);
+    super(
+      `Cloove: ${message}`,
+      clientFixable ? HttpStatus.BAD_REQUEST : HttpStatus.BAD_GATEWAY,
+    );
     this.upstreamStatus = upstreamStatus;
   }
 }
@@ -139,7 +157,15 @@ export class CloveClient {
         .map((d) => d.message)
         .filter(Boolean)
         .join('; ');
-      const message = detail || payload.message || payload.error || `HTTP ${res.status}`;
+      let message = detail || payload.message || payload.error || `HTTP ${res.status}`;
+      if (res.status === 401 || res.status === 403) {
+        // Name the most common cause outright: Cloove issues both a
+        // publishable key (clv_live_pk_…) and a secret key (clv_live_sk_…),
+        // and only the secret one works against this API.
+        message =
+          `${message}. Check you used the SECRET key (clv_live_sk_…) — a ` +
+          `publishable key (clv_live_pk_…) is rejected by the Cloove API.`;
+      }
       this.logger.warn(`${method} ${path} -> ${res.status}: ${message}`);
       throw new CloveApiError(message, res.status);
     }
