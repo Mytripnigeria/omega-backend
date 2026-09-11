@@ -11,6 +11,7 @@ import { CloveIngestService } from './clove-ingest.service';
 import { CloveController } from './clove.controller';
 import { CloveWebhookController } from './clove-webhook.controller';
 import { OrdersModule } from '../orders/orders.module';
+import { CustomersModule } from '../customers/customers.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { OrdersModule } from '../orders/orders.module';
     ]),
     // Ingestion creates orders through OrdersService.
     forwardRef(() => OrdersModule),
+    CustomersModule,
   ],
   controllers: [CloveController, CloveWebhookController],
   providers: [CloveClient, CloveService, CloveIngestService],

@@ -7,7 +7,11 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
-import { CustomerEntity, LoyaltyTier } from './entities/customer.entity';
+import {
+  CustomerEntity,
+  CustomerSource,
+  LoyaltyTier,
+} from './entities/customer.entity';
 import {
   PointsTransactionEntity,
   PointsTransactionType,
@@ -586,6 +590,68 @@ export class CustomersService {
     );
     if (delta.orderAt) customer.lastOrderAt = delta.orderAt;
     await this.customerRepo.save(customer);
+  }
+
+  /**
+   * Find-or-create the customer behind a marketplace order.
+   *
+   * Chowdeck and Cloove send a name and (usually) a phone/email but no id of
+   * ours, so without this an order's customer existed only as two loose text
+   * columns on the order row — never reaching the customers list, and never
+   * accumulating order counts or spend. Matching is by phone/email because
+   * that is what the marketplaces reliably supply; a returning customer is
+   * therefore recognised across channels instead of being duplicated.
+   *
+   * Returns `null` when there is nothing to match or create on (no phone and
+   * no email) rather than inventing an unreachable contact.
+   */
+  async findOrCreateFromChannel(
+    businessId: string,
+    input: {
+      name?: string | null;
+      email?: string | null;
+      phone?: string | null;
+      source: CustomerSource;
+    },
+  ): Promise<CustomerEntity | null> {
+    const email = input.email?.trim() || undefined;
+    const phone = input.phone?.trim() || undefined;
+    if (!email && !phone) return null;
+
+    const existing = await this.findByEmailOrPhone(businessId, email, phone);
+    if (existing) {
+      // Backfill whichever contact detail we did not have before — a customer
+      // first seen by phone gains their email the next time one arrives.
+      let touched = false;
+      if (email && !existing.email) {
+        existing.email = email;
+        touched = true;
+      }
+      if (phone && !existing.phone) {
+        existing.phone = phone;
+        touched = true;
+      }
+      if (touched) await this.customerRepo.save(existing);
+      return existing;
+    }
+
+    const parts = (input.name ?? '').trim().split(/\s+/).filter(Boolean);
+    const firstName = parts[0] || 'Guest';
+    const lastName = parts.slice(1).join(' ') || '-';
+
+    try {
+      return await this.createInternal(businessId, {
+        firstName,
+        lastName,
+        email,
+        phone,
+        source: input.source as never,
+      });
+    } catch {
+      // Raced with a concurrent ingest of the same customer (the unique index
+      // on businessId+phone/email caught it) — take whichever row won.
+      return this.findByEmailOrPhone(businessId, email, phone);
+    }
   }
 
   async createInternal(

@@ -235,6 +235,23 @@ export class CloveService {
       );
     }
 
+    /**
+     * Never publish an unpriced product. `price` is the cost price and
+     * `sellingPrice` the customer-facing one, and `sellingPrice` defaults to 0
+     * rather than null — so an unpriced item would be listed free rather than
+     * simply omitted.
+     */
+    const priced = products.filter((p) => Number(p.sellingPrice) > 0);
+    const skippedNoPrice = products
+      .filter((p) => Number(p.sellingPrice) <= 0)
+      .map((p) => p.name);
+    if (priced.length === 0) {
+      throw new BadRequestException(
+        "None of this store's active products have a selling price set, so " +
+          'there is nothing that can safely be published to Cloove.',
+      );
+    }
+
     const existingMap = await this.menuMapRepo.find({
       where: { integrationId: integration.id },
     });
@@ -244,9 +261,51 @@ export class CloveService {
 
     let created = 0;
     let updated = 0;
+    let adopted = 0;
     const failures: string[] = [];
 
-    for (const product of products) {
+    /**
+     * Adopt products that already exist on Cloove.
+     *
+     * Cloove has no external-reference field, so the only record that a
+     * product is already published is our own map — and that map is empty for
+     * anything the merchant built in Cloove directly, or published before this
+     * integration existed. Creating blindly then means asking Cloove to add a
+     * product it already has, which it refuses because product names are
+     * unique per business. That is exactly what produced a publish reporting
+     * "22 failed" against a catalogue that overlapped an existing Cloove menu.
+     *
+     * Matching on the normalised name is the only join available (there is no
+     * shared identifier), so an existing entry is adopted into the map and
+     * PATCHed in place instead of being duplicated.
+     */
+    const normalise = (name: string) =>
+      name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const unmapped = priced.filter((p) => !cloveIdByProduct.has(p.id));
+    if (unmapped.length > 0) {
+      try {
+        const remote = await this.client.listAllProducts(creds);
+        const remoteByName = new Map<string, string>();
+        for (const r of remote) {
+          if (r?.name && r?.id) remoteByName.set(normalise(r.name), r.id);
+        }
+        for (const product of unmapped) {
+          const match = remoteByName.get(normalise(product.name));
+          if (!match) continue;
+          cloveIdByProduct.set(product.id, match);
+          await this.rememberMapping(integration, product.id, match, product.name);
+          adopted += 1;
+        }
+      } catch (err) {
+        // A failed reconciliation must not stop the publish — it only means
+        // we fall back to the previous create-blindly behaviour.
+        this.logger.warn(
+          `Cloove catalogue reconciliation failed: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    for (const product of priced) {
       const input = this.buildProductInput(product);
       const knownCloveId = cloveIdByProduct.get(product.id);
       try {
@@ -271,9 +330,13 @@ export class CloveService {
     );
 
     return {
-      published: products.length,
+      published: priced.length,
+      /** Active products held back because they have no selling price. */
+      skippedNoPrice,
       created,
       updated,
+      /** Products already on Cloove that this publish claimed and updated. */
+      adopted,
       failures,
       mapped: await this.menuMapRepo.count({
         where: { integrationId: integration.id },
@@ -330,13 +393,13 @@ export class CloveService {
     const variants: CloveVariantInput[] = (product.variations ?? []).map((v) => ({
       name: v.name,
       // Cloove takes naira decimals, not kobo.
-      price: Number(v.sellingPrice ?? v.price ?? 0),
+      price: Number(v.sellingPrice),
       ...(v.sku ? { sku: v.sku } : {}),
     }));
 
     return {
       name: product.name,
-      price: Number(product.sellingPrice ?? product.price ?? 0),
+      price: Number(product.sellingPrice),
       ...(product.description ? { description: product.description } : {}),
       ...(product.sku ? { sku: product.sku } : {}),
       ...(variants.length ? { variants } : {}),

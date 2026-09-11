@@ -1,12 +1,14 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { CloveClient, CloveOrder } from './clove.client';
 import { CloveIntegrationEntity } from './entities/clove-integration.entity';
 import { CloveService } from './clove.service';
 import { OrdersService } from '../orders/orders.service';
 import { OrderEntity } from '../orders/entities/order.entity';
 import { ProductEntity } from '../products/entities/product.entity';
+import { CustomersService } from '../customers/customers.service';
+import { CustomerSource } from '../customers/entities/customer.entity';
 
 /**
  * Cloove orders → our POS.
@@ -28,6 +30,7 @@ export class CloveIngestService {
     private readonly clove: CloveService,
     private readonly client: CloveClient,
     private readonly orders: OrdersService,
+    private readonly customers: CustomersService,
   ) {}
 
   /** Only orders worth putting on a counter: placed and not already dead. */
@@ -144,6 +147,14 @@ export class CloveIngestService {
    * products actually mapped to this channel, so the id map and stock
    * deduction are exercised rather than stubbed.
    */
+  /**
+   * Inject a realistic Cloove order through the same path a pulled one takes.
+   *
+   * As with Chowdeck, this used to arrive as a customer called "Cloove Test"
+   * with no phone and every line priced at zero, which made it useless for
+   * rehearsing the counter flow. Prices now come from the real mapped
+   * products and the customer is someone the cashier could actually call.
+   */
   async simulateIncomingOrder(integration: CloveIntegrationEntity) {
     const mapped = await this.clove.mappedItems(integration.id, 2);
     if (mapped.length === 0) {
@@ -152,6 +163,30 @@ export class CloveIngestService {
           'from products that are actually mapped.',
       );
     }
+
+    const products = await this.productRepo.find({
+      where: { id: In(mapped.map((m) => m.productId)) },
+    });
+    const priceOf = new Map(
+      products.map((pr) => [pr.id, Number(pr.sellingPrice)]),
+    );
+
+    const items = mapped.map((m, i) => {
+      const quantity = i === 0 ? 2 : 1;
+      // Cloove deals in naira decimals, not kobo.
+      const unitPrice = priceOf.get(m.productId) ?? 0;
+      return {
+        id: `test-item-${i}`,
+        productId: m.cloveProductId,
+        variantId: null,
+        productName: m.name ?? 'Cloove item',
+        variantName: null,
+        quantity,
+        unitPrice,
+        totalPrice: unitPrice * quantity,
+      };
+    });
+
     const order: CloveOrder = {
       id: `test-${Date.now().toString(36)}`,
       shortCode: null,
@@ -160,17 +195,14 @@ export class CloveIngestService {
       currency: 'NGN',
       channel: 'clove-test',
       createdAt: new Date().toISOString(),
-      customer: { name: 'Cloove Test', phoneNumber: null },
-      items: mapped.map((m, i) => ({
-        id: `test-item-${i}`,
-        productId: m.cloveProductId,
-        variantId: null,
-        productName: m.name ?? 'Cloove item',
-        variantName: null,
-        quantity: i === 0 ? 2 : 1,
-        unitPrice: 0,
-        totalPrice: 0,
-      })),
+      totalAmount: items.reduce((sum, it) => sum + it.totalPrice, 0),
+      customer: {
+        name: 'Chinedu Eze',
+        phoneNumber: '+2348030000303',
+        whatsappNumber: '+2348030000303',
+        email: 'chinedu.eze@clove-test.example',
+      },
+      items,
     };
     return this.ingestOrder(integration, order);
   }
@@ -202,6 +234,23 @@ export class CloveIngestService {
       );
     }
 
+    const cloveCustomer = cloveOrder.customer;
+    const customerName = cloveCustomer?.name?.trim() || 'Cloove customer';
+    const customerPhone =
+      cloveCustomer?.phoneNumber ?? cloveCustomer?.whatsappNumber ?? undefined;
+
+    // Register the person behind the order so they reach the customers list
+    // and their repeat orders accumulate against one record.
+    const customerRecord = await this.customers.findOrCreateFromChannel(
+      integration.businessId,
+      {
+        name: customerName,
+        email: cloveCustomer?.email ?? null,
+        phone: customerPhone ?? null,
+        source: CustomerSource.CLOVE,
+      },
+    );
+
     const created = await this.orders.create(
       {
         // The integration row is the actor; its id is a real uuid, which the
@@ -214,8 +263,9 @@ export class CloveIngestService {
       },
       {
         channel: 'clove',
-        customerName: cloveOrder.customer?.name?.trim() || 'Cloove customer',
-        customerPhone: cloveOrder.customer?.phoneNumber ?? undefined,
+        ...(customerRecord ? { customerId: customerRecord.id } : {}),
+        customerName,
+        customerPhone,
         notes: this.buildNote(cloveOrder),
         accept: integration.autoAccept || undefined,
         items: lines,

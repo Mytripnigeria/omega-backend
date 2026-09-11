@@ -12,6 +12,7 @@ import { ChowdeckIngestService } from './chowdeck-ingest.service';
 import { ChowdeckController } from './chowdeck.controller';
 import { ChowdeckWebhookController } from './chowdeck-webhook.controller';
 import { OrdersModule } from '../orders/orders.module';
+import { CustomersModule } from '../customers/customers.module';
 
 /**
  * Chowdeck omnichannel integration.
@@ -31,6 +32,7 @@ import { OrdersModule } from '../orders/orders.module';
       OrderEntity,
     ]),
     forwardRef(() => OrdersModule),
+    CustomersModule,
   ],
   controllers: [ChowdeckController, ChowdeckWebhookController],
   providers: [ChowdeckClient, ChowdeckService, ChowdeckIngestService],

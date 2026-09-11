@@ -63,6 +63,22 @@ export interface ChowdeckAddress {
   coordinate?: { x: number; y: number } | null;
 }
 
+/**
+ * Chowdeck's rider. Their docs only ever show `"driver": {}` — never a
+ * populated example — so the field names are unknown until a real assignment
+ * arrives. Read it loosely and pick out whatever contact details are present
+ * rather than hard-coding a shape that may not match.
+ */
+export interface ChowdeckDriver {
+  id?: number | string | null;
+  name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  phone?: string | null;
+  phone_number?: string | null;
+  [key: string]: unknown;
+}
+
 export interface ChowdeckOrder {
   id: number;
   reference: string;
@@ -77,7 +93,10 @@ export interface ChowdeckOrder {
   customer?: ChowdeckCustomer | null;
   items?: ChowdeckOrderItem[] | null;
   customer_address?: ChowdeckAddress | null;
+  vendor_address?: ChowdeckAddress | null;
   vendor_information?: { name?: string } | null;
+  /** Populated once Chowdeck assigns a rider; `{}` before that. */
+  driver?: ChowdeckDriver | null;
 }
 
 export interface ChowdeckBulkUpdateResult {

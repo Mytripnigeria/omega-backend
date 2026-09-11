@@ -120,6 +120,16 @@ export class OrderReviewResponseDto {
   @Expose()
   imageUrls: string[] | null;
 
+  /**
+   * Photos the customer attached that could not be stored (object storage
+   * unavailable or the file unreadable). The review is still saved — losing a
+   * photo must not cost the merchant the rating — but the customer is told
+   * rather than being shown a silent success.
+   */
+  @ApiPropertyOptional({ example: 0 })
+  @Expose()
+  imagesFailed?: number;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)

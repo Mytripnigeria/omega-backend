@@ -5,18 +5,20 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import {
   ChowdeckClient,
   ChowdeckApiError,
   type ChowdeckOrder,
 } from './chowdeck.client';
 import { ChowdeckIntegrationEntity } from './entities/chowdeck-integration.entity';
-import { ChowdeckService, fromKobo } from './chowdeck.service';
+import { ChowdeckService, fromKobo, toKobo } from './chowdeck.service';
 import { ChowdeckWebhookBody } from './dto/chowdeck-integration.dto';
 import { OrdersService } from '../orders/orders.service';
 import { OrderEntity, OrderStatus } from '../orders/entities/order.entity';
 import { ProductEntity } from '../products/entities/product.entity';
+import { CustomersService } from '../customers/customers.service';
+import { CustomerSource } from '../customers/entities/customer.entity';
 
 /** Events Chowdeck sends. Anything else is acknowledged and ignored. */
 const ORDER_CREATED = 'ORDER_CREATED';
@@ -34,6 +36,7 @@ export class ChowdeckIngestService {
     private readonly chowdeck: ChowdeckService,
     private readonly client: ChowdeckClient,
     private readonly orders: OrdersService,
+    private readonly customers: CustomersService,
   ) {}
 
   /**
@@ -160,6 +163,17 @@ export class ChowdeckIngestService {
    * Lines are drawn from products already mapped to this channel, so stock
    * deduction and the menu-id map are exercised too, not stubbed.
    */
+  /**
+   * Inject a realistic Chowdeck order through the same path a live one takes.
+   *
+   * It has to be *realistic*, not merely present: the earlier version sent a
+   * customer literally called "Chowdeck Test" with no phone, every line priced
+   * at zero and no address at all, so the order landed on the workstation as a
+   * ₦0 delivery to nobody. Nothing about the counter or delivery flow could
+   * actually be rehearsed against it. Prices now come from the real mapped
+   * products, and the order carries the customer, address and rider details a
+   * live Chowdeck order carries.
+   */
   async simulateIncomingOrder(
     integration: ChowdeckIntegrationEntity,
     opts?: { reference?: string },
@@ -174,32 +188,85 @@ export class ChowdeckIngestService {
     const reference =
       opts?.reference ?? `TEST-${Date.now().toString(36).toUpperCase()}`;
 
+    // Real selling prices, so the order totals to something a cashier can
+    // reconcile and the payment shows as genuinely settled.
+    const products = await this.productRepo.find({
+      where: { id: In(mapped.map((m) => m.productId)) },
+    });
+    const priceOf = new Map(
+      products.map((pr) => [
+        pr.id,
+        Number(pr.sellingPrice),
+      ]),
+    );
+
     const items = mapped.map((m, i) => ({
       id: Number(m.chowdeckMenuId),
       quantity: i === 0 ? 2 : 1,
-      price_per_quantity: 0,
+      price_per_quantity: toKobo(priceOf.get(m.productId) ?? 0),
       description: m.name,
     }));
+
+    const itemsTotal = items.reduce(
+      (sum, it) => sum + it.price_per_quantity * it.quantity,
+      0,
+    );
+    const deliveryPrice = toKobo(1200);
 
     const order: ChowdeckOrder = {
       id: Date.now() % 2_000_000_000,
       reference,
       status: 'order_placed',
-      total_price: 0,
+      class: 'delivery',
+      total_price: itemsTotal + deliveryPrice,
+      delivery_price: deliveryPrice,
       currency: 'NGN',
       source: 'chowdeck-test',
+      summary: 'Test order injected from the merchant dashboard',
       created_at: new Date().toISOString(),
       customer: {
-        first_name: 'Chowdeck',
-        last_name: 'Test',
-        email: null,
-        phone: null,
+        first_name: 'Adaeze',
+        last_name: 'Okonkwo',
+        email: 'adaeze.okonkwo@chowdeck-test.example',
+        phone: '+2348030000101',
+        country_code: 'NG',
+      },
+      customer_address: {
+        street: '14 Adeola Odeku Street, Victoria Island',
+        pretty_name: '14 Adeola Odeku Street, Victoria Island, Lagos',
+        city: 'Lagos',
+        state: 'Lagos',
+        country: 'NG',
+        coordinate: { x: 3.4216, y: 6.4281 },
+      },
+      driver: {
+        name: 'Musa Ibrahim',
+        phone: '+2348030000202',
       },
       items,
       vendor_information: { name: integration.label ?? 'Chowdeck' },
     };
 
     return this.ingestOrder(integration, order);
+  }
+
+  /**
+   * Chowdeck's rider, read defensively — their docs never show a populated
+   * `driver`, so take whichever of the plausible name/phone spellings is
+   * actually present rather than assuming one.
+   */
+  private riderOf(order: ChowdeckOrder): {
+    name: string | null;
+    phone: string | null;
+  } {
+    const d = order.driver;
+    if (!d || typeof d !== 'object') return { name: null, phone: null };
+    const name =
+      (d.name ?? null) ||
+      [d.first_name, d.last_name].filter(Boolean).join(' ').trim() ||
+      null;
+    const phone = (d.phone ?? d.phone_number ?? null) || null;
+    return { name, phone };
   }
 
   private async ingestOrder(
@@ -234,6 +301,21 @@ export class ChowdeckIngestService {
       [customer?.first_name, customer?.last_name].filter(Boolean).join(' ').trim() ||
       'Chowdeck customer';
     const address = chowdeckOrder.customer_address;
+    const rider = this.riderOf(chowdeckOrder);
+
+    // Register the person behind the order. Without this a marketplace
+    // customer only ever existed as two text columns on the order row: they
+    // never appeared in the customers list, and repeat orders from the same
+    // phone never accumulated against one record.
+    const customerRecord = await this.customers.findOrCreateFromChannel(
+      integration.businessId,
+      {
+        name: customerName,
+        email: customer?.email ?? null,
+        phone: customer?.phone ?? null,
+        source: CustomerSource.CHOWDECK,
+      },
+    );
 
     const created = await this.orders.create(
       {
@@ -248,6 +330,7 @@ export class ChowdeckIngestService {
       {
         channel: 'chowdeck',
         isDelivery: true,
+        ...(customerRecord ? { customerId: customerRecord.id } : {}),
         customerName,
         customerPhone: customer?.phone ?? undefined,
         // Chowdeck's rider handles the leg, so the fee is theirs, not revenue
@@ -278,6 +361,8 @@ export class ChowdeckIngestService {
         paymentStatus: 'paid',
         paidAmount: Number(created.total),
         paidAt: new Date(),
+        riderName: rider.name,
+        riderPhone: rider.phone,
       },
     );
 

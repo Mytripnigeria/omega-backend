@@ -34,7 +34,16 @@ export class ReviewsService {
   ) {}
 
   /** Largest photo we accept per review image, before base64 expansion. */
-  private static readonly MAX_REVIEW_IMAGE_BYTES = 5 * 1024 * 1024;
+  /**
+   * Per-photo ceiling after base64 decoding.
+   *
+   * Deliberately well under the 5 MB JSON body limit in `main.ts`: the images
+   * arrive base64-encoded inside the request body (which inflates them by
+   * about a third), so a 5 MB photo could never have reached this check in the
+   * first place — the request died at the body parser. The storefront now
+   * downscales before sending, and this is the backstop.
+   */
+  private static readonly MAX_REVIEW_IMAGE_BYTES = 2 * 1024 * 1024;
 
   /**
    * Stores the customer's attached photos and returns their public URLs.
@@ -47,8 +56,8 @@ export class ReviewsService {
   private async storeReviewImages(
     customerId: string,
     images: string[] | undefined,
-  ): Promise<string[] | null> {
-    if (!images?.length) return null;
+  ): Promise<{ urls: string[] | null; failed: number }> {
+    if (!images?.length) return { urls: null, failed: 0 };
 
     const urls: string[] = [];
     for (const [index, raw] of images.slice(0, 4).entries()) {
@@ -84,7 +93,10 @@ export class ReviewsService {
         );
       }
     }
-    return urls.length > 0 ? urls : null;
+    return {
+      urls: urls.length > 0 ? urls : null,
+      failed: images.slice(0, 4).length - urls.length,
+    };
   }
 
   async submit(
@@ -111,6 +123,18 @@ export class ReviewsService {
 
     const customer = await this.customerRepo.findOne({ where: { id: customerId } });
 
+    // A photo that could not be stored must not cost the customer their
+    // rating, but it must not be silent either: object storage being
+    // misconfigured looked exactly like the feature not working, because the
+    // review came back 201 with no photos and nothing said why.
+    const storedImages = await this.storeReviewImages(customerId, dto.images);
+    if (storedImages.failed > 0) {
+      this.logger.error(
+        `${storedImages.failed} review photo(s) could not be stored for order ` +
+          `${orderId}. Check the object-storage configuration (S3/R2).`,
+      );
+    }
+
     const review = this.reviewRepo.create({
       businessId,
       storeId: order.storeId,
@@ -121,12 +145,15 @@ export class ReviewsService {
         : 'Customer',
       rating: dto.rating,
       comment: dto.comment ?? null,
-      imageUrls: await this.storeReviewImages(customerId, dto.images),
+      imageUrls: storedImages.urls,
       isPublished: false,
     });
 
     const saved = await this.reviewRepo.save(review);
-    return OrderReviewResponseDto.from(saved);
+    return {
+      ...OrderReviewResponseDto.from(saved),
+      imagesFailed: storedImages.failed,
+    };
   }
 
   async findForOrder(

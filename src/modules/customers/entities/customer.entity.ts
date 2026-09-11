@@ -21,6 +21,10 @@ export enum CustomerSource {
   STOREFRONT = 'storefront',
   REFERRAL = 'referral',
   IMPORT = 'import',
+  /** Order arrived through the Chowdeck marketplace integration. */
+  CHOWDECK = 'chowdeck',
+  /** Order arrived through the CloveAI marketplace integration. */
+  CLOVE = 'clove',
   OTHER = 'other',
 }
 

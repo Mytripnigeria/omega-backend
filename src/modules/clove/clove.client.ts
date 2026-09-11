@@ -71,7 +71,13 @@ export interface CloveOrder {
   items?: CloveOrderItem[] | null;
   totalAmount?: number | string | null;
   currency?: string | null;
-  customer?: { name?: string | null; phoneNumber?: string | null } | null;
+  customer?: {
+    id?: string | null;
+    name?: string | null;
+    phoneNumber?: string | null;
+    whatsappNumber?: string | null;
+    email?: string | null;
+  } | null;
   store?: { id?: string; name?: string } | null;
   channel?: string | null;
   notes?: string | null;

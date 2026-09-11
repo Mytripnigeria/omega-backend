@@ -191,7 +191,22 @@ export class ChowdeckService {
     if (dto.autoAccept !== undefined) entity.autoAccept = dto.autoAccept;
     if (!entity.webhookToken) entity.webhookToken = randomBytes(24).toString('hex');
 
-    const saved = await this.integrationRepo.save(entity);
+    let saved: ChowdeckIntegrationEntity;
+    try {
+      saved = await this.integrationRepo.save(entity);
+    } catch (err) {
+      // (storeId, merchantReference) is unique. Adding a second channel with a
+      // reference the store already uses is a mistake worth naming, not a
+      // 500 — the merchant has almost certainly meant to edit the existing one.
+      if ((err as { code?: string }).code === '23505') {
+        throw new BadRequestException(
+          `This store is already connected to Chowdeck merchant ` +
+            `"${entity.merchantReference}". Pick that channel to edit it, or ` +
+            `use a different merchant reference for the new one.`,
+        );
+      }
+      throw err;
+    }
     return this.present(saved, entity.secretKey);
   }
 
@@ -331,7 +346,27 @@ export class ChowdeckService {
       : [];
     const categoryById = new Map(categories.map((c) => [c.id, c]));
 
-    const items = products.map((product) => {
+    /**
+     * A product with no selling price must never reach a marketplace.
+     *
+     * `price` is the *cost* price and `sellingPrice` the customer-facing one,
+     * so falling back from one to the other would have published what the
+     * item costs us. And because `sellingPrice` defaults to 0 rather than
+     * null, a product nobody has priced yet would go up as free food that
+     * anyone could order. Hold those back and name them instead.
+     */
+    const priced = products.filter((p) => Number(p.sellingPrice) > 0);
+    const skippedNoPrice = products
+      .filter((p) => Number(p.sellingPrice) <= 0)
+      .map((p) => p.name);
+    if (priced.length === 0) {
+      throw new BadRequestException(
+        'None of this store\'s active products have a selling price set, so ' +
+          'there is nothing that can safely be published to Chowdeck.',
+      );
+    }
+
+    const items = priced.map((product) => {
       const category = product.categoryId
         ? categoryById.get(product.categoryId)
         : undefined;
@@ -339,7 +374,7 @@ export class ChowdeckService {
         reference: product.id,
         name: product.name,
         description: product.description ?? product.name,
-        price: toKobo(Number(product.sellingPrice ?? product.price ?? 0)),
+        price: toKobo(Number(product.sellingPrice)),
         in_stock: product.status !== false && (product.stock ?? 0) !== 0,
         images: product.imageUrl ? [{ path: product.imageUrl }] : [],
         category: {
@@ -382,6 +417,11 @@ export class ChowdeckService {
     return {
       published: items.length,
       /**
+       * Active products held back because nobody has given them a selling
+       * price — listing them would have offered them free.
+       */
+      skippedNoPrice,
+      /**
        * Items that were on the Chowdeck menu before this publish and are not in
        * our catalogue — the replace removed them. Surfaced so a merchant can
        * see immediately if they have just wiped something.
@@ -406,7 +446,7 @@ export class ChowdeckService {
         maximum_selection: 1,
         items: product.variations.map((v) => ({
           name: v.name,
-          price: toKobo(Number(v.sellingPrice ?? v.price ?? 0)),
+          price: toKobo(Number(v.sellingPrice)),
           reference: v.id,
         })),
       });

@@ -314,6 +314,22 @@ export class OrderEntity {
   @Column({ type: 'jsonb', nullable: true })
   deliveryAddress: Record<string, unknown> | null;
 
+  /**
+   * The rider carrying this order, when the delivery leg is run by a
+   * marketplace rather than our own staff. Chowdeck and Cloove dispatch their
+   * own riders, so there is no staff row to point at — the name and phone are
+   * snapshotted here so the counter can actually reach whoever is collecting.
+   * Null for in-house deliveries, where the assigned staff rider is the
+   * source of truth.
+   */
+  @ApiPropertyOptional({ example: 'Musa Ibrahim', nullable: true })
+  @Column({ type: 'varchar', nullable: true })
+  riderName: string | null;
+
+  @ApiPropertyOptional({ example: '+2348030000000', nullable: true })
+  @Column({ type: 'varchar', nullable: true })
+  riderPhone: string | null;
+
   @ApiPropertyOptional({
     type: String,
     format: 'date-time',
