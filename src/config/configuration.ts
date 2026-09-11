@@ -22,6 +22,23 @@ export default () => ({
   },
   allowedOrigins: (process.env.ALLOWED_ORIGINS ?? '').split(',').filter(Boolean),
   bcryptSaltRounds: parseInt(process.env.BCRYPT_SALT_ROUNDS ?? '10', 10),
+  storage: {
+    // Which backend serves uploads: 'cloudinary' or 's3' (Cloudflare R2, AWS
+    // S3, MinIO). Defaults to whichever one is actually configured, so a
+    // deployment only has to set the credentials, not also remember a switch.
+    driver:
+      process.env.STORAGE_DRIVER ??
+      (process.env.CLOUDINARY_CLOUD_NAME ? 'cloudinary' : 's3'),
+  },
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME ?? '',
+    apiKey: process.env.CLOUDINARY_API_KEY ?? '',
+    apiSecret: process.env.CLOUDINARY_API_SECRET ?? '',
+    // Auto format + auto quality. Derived versions are cached by Cloudinary,
+    // so this costs one transformation per unique variant, not per request,
+    // and cuts delivered bytes (and therefore credits) substantially.
+    deliveryTransform: process.env.CLOUDINARY_DELIVERY_TRANSFORM ?? 'f_auto,q_auto',
+  },
   s3: {
     endpoint: process.env.S3_ENDPOINT ?? '',
     region: process.env.S3_REGION ?? 'auto',

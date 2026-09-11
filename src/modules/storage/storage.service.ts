@@ -8,27 +8,18 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindOptionsWhere } from 'typeorm';
-import {
-  S3Client,
-  PutObjectCommand,
-  DeleteObjectCommand,
-  NoSuchKey,
-} from '@aws-sdk/client-s3';
-import { randomUUID } from 'crypto';
-import { extname } from 'path';
 import { FileEntity } from './entities/file.entity';
 import { ListFilesDto } from './dto/list-files.dto';
 import { PaginatedResponseDto } from '../../common/dto/pagination.dto';
-
-interface S3Config {
-  endpoint: string;
-  region: string;
-  bucket: string;
-  accessKeyId: string;
-  secretAccessKey: string;
-  publicUrlBase: string;
-  forcePathStyle: boolean;
-}
+import {
+  StorageDriver,
+  StorageDriverName,
+} from './drivers/storage-driver.interface';
+import { S3Driver, S3DriverConfig } from './drivers/s3.driver';
+import {
+  CloudinaryDriver,
+  CloudinaryDriverConfig,
+} from './drivers/cloudinary.driver';
 
 export interface UploadOptions {
   folder?: string;
@@ -39,28 +30,16 @@ export interface UploadOptions {
 @Injectable()
 export class StorageService implements OnModuleInit {
   private readonly logger = new Logger(StorageService.name);
-  private readonly client: S3Client;
-  private readonly config: S3Config;
-
-  onModuleInit(): void {
-    const missing: string[] = [];
-    if (!this.config.bucket) missing.push('S3_BUCKET');
-    if (!this.config.accessKeyId) missing.push('S3_ACCESS_KEY_ID');
-    if (!this.config.secretAccessKey) missing.push('S3_SECRET_ACCESS_KEY');
-    if (!this.config.publicUrlBase) missing.push('S3_PUBLIC_URL_BASE');
-    if (missing.length > 0) {
-      this.logger.warn(
-        `Storage is NOT configured — uploads will fail. Missing env: ${missing.join(', ')}`,
-      );
-    }
-  }
+  /** Every driver, keyed by name, so old objects stay deletable after a switch. */
+  private readonly drivers: Record<StorageDriverName, StorageDriver>;
+  private readonly driver: StorageDriver;
 
   constructor(
     private readonly configService: ConfigService,
     @InjectRepository(FileEntity)
     private readonly fileRepo: Repository<FileEntity>,
   ) {
-    this.config = this.configService.get<S3Config>('s3', {
+    const s3Config = this.configService.get<S3DriverConfig>('s3', {
       endpoint: '',
       region: 'auto',
       bucket: '',
@@ -69,16 +48,30 @@ export class StorageService implements OnModuleInit {
       publicUrlBase: '',
       forcePathStyle: true,
     });
+    const cloudinaryConfig = this.configService.get<CloudinaryDriverConfig>(
+      'cloudinary',
+      { cloudName: '', apiKey: '', apiSecret: '', deliveryTransform: '' },
+    );
 
-    this.client = new S3Client({
-      region: this.config.region,
-      ...(this.config.endpoint ? { endpoint: this.config.endpoint } : {}),
-      credentials: {
-        accessKeyId: this.config.accessKeyId,
-        secretAccessKey: this.config.secretAccessKey,
-      },
-      forcePathStyle: this.config.forcePathStyle,
-    });
+    this.drivers = {
+      r2: new S3Driver(s3Config),
+      cloudinary: new CloudinaryDriver(cloudinaryConfig),
+    };
+
+    const configured = this.configService.get<string>('storage.driver', 's3');
+    this.driver =
+      configured === 'cloudinary' ? this.drivers.cloudinary : this.drivers.r2;
+  }
+
+  onModuleInit(): void {
+    const missing = this.driver.missingConfig();
+    if (missing.length > 0) {
+      this.logger.warn(
+        `Storage driver "${this.driver.name}" is NOT configured — uploads will fail. Missing env: ${missing.join(', ')}`,
+      );
+      return;
+    }
+    this.logger.log(`Storage driver: ${this.driver.name}`);
   }
 
   async upload(
@@ -87,49 +80,44 @@ export class StorageService implements OnModuleInit {
     originalName: string,
     options: UploadOptions = {},
   ): Promise<FileEntity> {
-    if (!this.config.bucket) {
+    const missing = this.driver.missingConfig();
+    if (missing.length > 0) {
       throw new InternalServerErrorException(
-        'Storage is not configured: missing S3_BUCKET. Ask your admin to set the S3/R2 env vars.',
-      );
-    }
-    if (!this.config.publicUrlBase) {
-      throw new InternalServerErrorException(
-        'Storage is not configured: missing S3_PUBLIC_URL_BASE.',
-      );
-    }
-    if (!this.config.accessKeyId || !this.config.secretAccessKey) {
-      throw new InternalServerErrorException(
-        'Storage credentials are missing (S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY). Uploads disabled until configured.',
+        `Storage is not configured for driver "${this.driver.name}": missing ${missing.join(', ')}. Ask your admin to set these env vars.`,
       );
     }
 
     const folder = (options.folder ?? 'misc').replace(/^\/+|\/+$/g, '');
-    const ext = extname(originalName) || '';
-    const key = `${folder}/${randomUUID()}${ext}`;
 
+    let stored: Awaited<ReturnType<StorageDriver['put']>>;
     try {
-      await this.client.send(
-        new PutObjectCommand({
-          Bucket: this.config.bucket,
-          Key: key,
-          Body: buffer,
-          ContentType: mimetype,
-        }),
-      );
+      stored = await this.driver.put({
+        buffer,
+        mimetype,
+        originalName,
+        folder,
+      });
     } catch (err) {
-      this.logger.error(`R2 upload failed: ${(err as Error).message}`, (err as Error).stack);
+      this.logger.error(
+        `${this.driver.name} upload failed: ${(err as Error).message}`,
+        (err as Error).stack,
+      );
       throw new InternalServerErrorException('Failed to upload file');
     }
 
     const file = this.fileRepo.create({
-      key,
-      url: `${this.config.publicUrlBase}/${key}`,
+      key: stored.key,
+      url: stored.url,
       originalName,
       mimetype,
       size: buffer.length,
       folder,
       uploadedById: options.uploadedById ?? null,
-      metadata: options.metadata ?? null,
+      metadata: {
+        ...(options.metadata ?? {}),
+        ...(stored.metadata ?? {}),
+        driver: this.driver.name,
+      },
     } as Partial<FileEntity>);
 
     return this.fileRepo.save(file as FileEntity);
@@ -171,28 +159,63 @@ export class StorageService implements OnModuleInit {
 
   async delete(id: string): Promise<void> {
     const file = await this.findById(id);
-    await this.deleteObject(file.key);
+    await this.deleteObject(file);
     await this.fileRepo.softDelete(id);
   }
 
   async hardDelete(id: string): Promise<void> {
-    const file = await this.fileRepo.findOne({ where: { id }, withDeleted: true });
+    const file = await this.fileRepo.findOne({
+      where: { id },
+      withDeleted: true,
+    });
     if (!file) throw new NotFoundException(`File ${id} not found`);
-    await this.deleteObject(file.key);
+    await this.deleteObject(file);
     await this.fileRepo.delete(id);
   }
 
-  private async deleteObject(key: string): Promise<void> {
-    try {
-      await this.client.send(
-        new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }),
+  private async deleteObject(file: FileEntity): Promise<void> {
+    // Rows written before the driver was recorded all came from S3/R2.
+    const recorded = file.metadata?.driver;
+    const name: StorageDriverName = recorded === 'cloudinary' ? 'cloudinary' : 'r2';
+    const driver = this.drivers[name];
+    const isActive = name === this.driver.name;
+
+    // A file on a backend we have migrated away from must still be deletable.
+    // The row is the record the app cares about; the object is best-effort
+    // cleanup, and a decommissioned backend can no longer perform it — R2, for
+    // instance, answers every call with "Please enable R2 through the
+    // Cloudflare Dashboard" while its credentials still look perfectly valid.
+    // Orphaning those bytes beats making the file undeletable forever.
+    const orphan = (reason: string): void => {
+      this.logger.error(
+        `File ${file.id} (${file.key}) lives on "${name}", which is no longer in use: ${reason}. Deleting the row and leaving the object behind.`,
       );
+    };
+
+    const missing = driver.missingConfig();
+    if (missing.length > 0) {
+      const reason = `missing ${missing.join(', ')}`;
+      if (isActive) {
+        throw new InternalServerErrorException(
+          `Storage is not configured for driver "${name}": ${reason}.`,
+        );
+      }
+      orphan(reason);
+      return;
+    }
+
+    try {
+      await driver.remove(file.key, file.metadata);
     } catch (err) {
-      if (err instanceof NoSuchKey) {
-        this.logger.warn(`R2 object ${key} already absent; proceeding with row deletion`);
+      const message = (err as Error).message;
+      if (!isActive) {
+        orphan(message);
         return;
       }
-      this.logger.error(`R2 delete failed for ${key}: ${(err as Error).message}`, (err as Error).stack);
+      this.logger.error(
+        `${name} delete failed for ${file.key}: ${message}`,
+        (err as Error).stack,
+      );
       throw new InternalServerErrorException('Failed to delete file');
     }
   }
