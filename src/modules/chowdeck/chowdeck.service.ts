@@ -408,6 +408,32 @@ export class ChowdeckService {
 
     const map = await this.rebuildMenuMap(integration, creds);
 
+    /**
+     * Confirm the variations actually landed.
+     *
+     * `modifiers` is the only way to publish variations and add-ons, and bulk
+     * upload acknowledges the item references without saying a word about the
+     * groups it made from them — so "did my variations reach Chowdeck?" was
+     * previously unanswerable from our side. Read the groups back and say.
+     *
+     * Best-effort by design: this is a report, and a read that fails must
+     * never turn a successful publish into an error.
+     */
+    const variationsSent = items.reduce(
+      (sum, i) => sum + (Array.isArray(i.modifiers) ? i.modifiers.length : 0),
+      0,
+    );
+    let variationGroupsLive: number | null = null;
+    try {
+      const groups = await this.client.listMenuGroups(creds);
+      variationGroupsLive = Array.isArray(groups) ? groups.length : 0;
+    } catch (err) {
+      this.logger.warn(
+        `Could not read Chowdeck menu groups back after publishing: ` +
+          `${(err as Error).message}`,
+      );
+    }
+
     integration.lastMenuSyncAt = new Date();
     await this.integrationRepo.update(
       { id: integration.id },
@@ -432,6 +458,14 @@ export class ChowdeckService {
       updateFailures,
       mapped: map.mapped,
       unmapped: map.unmapped,
+      /** Variation/add-on groups included in this publish. */
+      variationsSent,
+      /**
+       * Groups Chowdeck holds after it. `null` means the check itself could
+       * not run — which is not the same as "none", and must not be reported
+       * as though it were.
+       */
+      variationGroupsLive,
     };
   }
 

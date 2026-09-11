@@ -79,6 +79,22 @@ export interface ChowdeckDriver {
   [key: string]: unknown;
 }
 
+/** A Chowdeck "menu group": one variation or add-on group and its options. */
+export interface ChowdeckMenuGroup {
+  id: number;
+  name: string;
+  reference?: string | null;
+  minimum_selection?: number;
+  maximum_selection?: number;
+  items?: Array<{
+    id: number;
+    name: string;
+    price: number;
+    in_stock?: boolean;
+    menu_id?: number | null;
+  }> | null;
+}
+
 export interface ChowdeckOrder {
   id: number;
   reference: string;
@@ -148,11 +164,38 @@ export class ChowdeckClient {
   private static readonly DEFAULT_BASE_URL = 'https://api.chowdeck.com';
   private static readonly TIMEOUT_MS = 15_000;
 
-  private endpoint(creds: ChowdeckCredentials, path: string): string {
-    const base = (creds.baseUrl || ChowdeckClient.DEFAULT_BASE_URL).replace(
+  /**
+   * Menu *groups* — Chowdeck's name for what a merchant calls variations and
+   * add-ons — are only readable from a different host. `api.chowdeck.com`
+   * serves the write side (menu CRUD, bulk upload); `studio-api.chowdeck.com`
+   * serves `menu-group`, `menu-group-item` and single-menu reads. Same bearer
+   * token either way.
+   *
+   * This matters more than a spare hostname usually would: checking
+   * `GET /menu-group` against the write host returns nothing, which reads
+   * exactly like "the variations never landed" when in fact the question was
+   * put to the wrong server.
+   */
+  private static readonly DEFAULT_STUDIO_BASE_URL =
+    'https://studio-api.chowdeck.com';
+
+  private endpoint(
+    creds: ChowdeckCredentials,
+    path: string,
+    host: 'api' | 'studio' = 'api',
+  ): string {
+    const configured = (creds.baseUrl || ChowdeckClient.DEFAULT_BASE_URL).replace(
       /\/+$/,
       '',
     );
+    // Follow whatever host the merchant configured (sandbox, staging) rather
+    // than hard-coding production when they have overridden the base.
+    const base =
+      host === 'studio'
+        ? configured.includes('//api.')
+          ? configured.replace('//api.', '//studio-api.')
+          : ChowdeckClient.DEFAULT_STUDIO_BASE_URL
+        : configured;
     return `${base}/merchant/${encodeURIComponent(creds.merchantReference)}${path}`;
   }
 
@@ -161,8 +204,9 @@ export class ChowdeckClient {
     method: 'GET' | 'POST' | 'PUT',
     path: string,
     body?: unknown,
+    host: 'api' | 'studio' = 'api',
   ): Promise<T> {
-    const url = this.endpoint(creds, path);
+    const url = this.endpoint(creds, path, host);
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(),
@@ -210,6 +254,23 @@ export class ChowdeckClient {
     }
 
     return (parsed as ChowdeckEnvelope<T>)?.data as T;
+  }
+
+  /**
+   * Variation and add-on groups Chowdeck currently holds for this merchant.
+   *
+   * Read-only, and used to confirm that a publish's `modifiers` actually
+   * landed — bulk upload answers "Menu Group created successfully" but echoes
+   * only the item references, so it says nothing about the groups themselves.
+   */
+  listMenuGroups(creds: ChowdeckCredentials): Promise<ChowdeckMenuGroup[]> {
+    return this.request<ChowdeckMenuGroup[]>(
+      creds,
+      'GET',
+      '/menu-group',
+      undefined,
+      'studio',
+    );
   }
 
   /** Authoritative order record. Also used to prove an incoming webhook is real. */
