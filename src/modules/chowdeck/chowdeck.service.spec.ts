@@ -43,7 +43,7 @@ describe('ChowdeckService.syncMenu', () => {
       .mockResolvedValue(integration as never);
     jest
       .spyOn(service, 'rebuildMenuMap')
-      .mockResolvedValue({ mapped: products.length, unmapped: 0 } as never);
+      .mockResolvedValue({ mapped: products.length, unmapped: [], menu: [] } as never);
     return { service, client, integrationRepo };
   };
 
@@ -87,7 +87,10 @@ describe('ChowdeckService.syncMenu', () => {
     expect(client.bulkUploadMenu).not.toHaveBeenCalled();
   });
 
-  it('sends variations as a single-choice modifier group', async () => {
+  it('sends variations as a single-choice modifier group priced as differences', async () => {
+    // Chowdeck adds a modifier's price on top of the item price, so a sized
+    // product is listed at its cheapest size and each size carries only the
+    // difference — sending full prices (as this used to) doubled the bill.
     const { service, client } = build([
       productFixture({
         name: 'Jollof Rice',
@@ -102,6 +105,7 @@ describe('ChowdeckService.syncMenu', () => {
     await service.syncMenu('biz-1', 'store-1', 'int-1');
 
     const [item] = publishedItems(client);
+    expect(item.price).toBe(toKobo(3000));
     expect(item.modifiers).toHaveLength(1);
     const [group] = item.modifiers;
     expect(group).toMatchObject({
@@ -110,9 +114,68 @@ describe('ChowdeckService.syncMenu', () => {
       maximum_selection: 1,
     });
     expect(group.items).toEqual([
-      { name: 'Small', price: toKobo(3000), reference: 'var-s' },
-      { name: 'Large', price: toKobo(6000), reference: 'var-l' },
+      { name: 'Small', price: 0, reference: 'var-s' },
+      { name: 'Large', price: toKobo(3000), reference: 'var-l' },
     ]);
+  });
+
+  it('charges exactly the size price once a size is picked', async () => {
+    const { service, client } = build([
+      productFixture({
+        name: 'Chicken Shawarma',
+        sellingPrice: 3000,
+        variations: [
+          { id: 'v-s', name: 'Small', sellingPrice: 3000 },
+          { id: 'v-m', name: 'Medium', sellingPrice: 3400 },
+          { id: 'v-b', name: 'Big', sellingPrice: 3800 },
+        ],
+      }),
+    ]);
+
+    await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+    const [item] = publishedItems(client);
+    const sizePrice: Record<string, number> = { Small: 3000, Medium: 3400, Big: 3800 };
+    for (const opt of item.modifiers[0].items as Array<{ name: string; price: number }>) {
+      const charged = item.price + opt.price;
+      expect(charged).toBe(toKobo(sizePrice[opt.name]));
+    }
+  });
+
+  it('publishes a product priced only through its sizes', async () => {
+    const { service, client } = build([
+      productFixture({
+        name: 'Parfait',
+        sellingPrice: 0,
+        variations: [
+          { id: 'v1', name: 'Regular', sellingPrice: 4000 },
+          { id: 'v2', name: 'Large', sellingPrice: 5500 },
+        ],
+      }),
+    ]);
+
+    const res = await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+    expect(res.skippedNoPrice).toEqual([]);
+    expect(publishedItems(client)[0].price).toBe(toKobo(4000));
+  });
+
+  it('never sends a negative size price', async () => {
+    const { service, client } = build([
+      productFixture({
+        sellingPrice: 9000,
+        variations: [
+          { id: 'v1', name: 'Small', sellingPrice: 9000 },
+          { id: 'v2', name: 'Mini', sellingPrice: 7000 },
+        ],
+      }),
+    ]);
+
+    await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+    const [item] = publishedItems(client);
+    expect(item.price).toBe(toKobo(7000));
+    expect(item.modifiers[0].items.every((o: { price: number }) => o.price >= 0)).toBe(true);
   });
 
   it('sends add-on groups with their own selection bounds, skipping unavailable add-ons', async () => {

@@ -130,6 +130,8 @@ export interface ChowdeckMenuItem {
   reference: string | null;
   price: number;
   in_stock: boolean;
+  /** Comma-separated ids of the modifier groups attached to the item. */
+  menu_group_ids?: string | null;
 }
 
 /**

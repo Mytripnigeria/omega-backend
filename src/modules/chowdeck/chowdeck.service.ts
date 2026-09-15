@@ -355,9 +355,9 @@ export class ChowdeckService {
      * null, a product nobody has priced yet would go up as free food that
      * anyone could order. Hold those back and name them instead.
      */
-    const priced = products.filter((p) => Number(p.sellingPrice) > 0);
+    const priced = products.filter((p) => ChowdeckService.basePriceOf(p) > 0);
     const skippedNoPrice = products
-      .filter((p) => Number(p.sellingPrice) <= 0)
+      .filter((p) => ChowdeckService.basePriceOf(p) <= 0)
       .map((p) => p.name);
     if (priced.length === 0) {
       throw new BadRequestException(
@@ -374,7 +374,7 @@ export class ChowdeckService {
         reference: product.id,
         name: product.name,
         description: product.description ?? product.name,
-        price: toKobo(Number(product.sellingPrice)),
+        price: toKobo(ChowdeckService.basePriceOf(product)),
         in_stock: product.status !== false && (product.stock ?? 0) !== 0,
         images: product.imageUrl ? [{ path: product.imageUrl }] : [],
         category: {
@@ -411,28 +411,26 @@ export class ChowdeckService {
     /**
      * Confirm the variations actually landed.
      *
-     * `modifiers` is the only way to publish variations and add-ons, and bulk
-     * upload acknowledges the item references without saying a word about the
-     * groups it made from them — so "did my variations reach Chowdeck?" was
-     * previously unanswerable from our side. Read the groups back and say.
-     *
-     * Best-effort by design: this is a report, and a read that fails must
-     * never turn a successful publish into an error.
+     * `modifiers` is the only way to publish variations and add-ons through
+     * the merchant API (verified against the live API: `menu_parent_id`,
+     * `is_variation_parent` and nested `variations` are all silently ignored
+     * on create — Chowdeck's "Variations" section is only fillable from their
+     * dashboard's own session API). Bulk upload acknowledges item references
+     * without a word about the groups it made from them, and the studio host
+     * that lists groups rejects the merchant key. What the merchant API does
+     * expose is `menu_group_ids` on each menu item, so count those.
      */
     const variationsSent = items.reduce(
       (sum, i) => sum + (Array.isArray(i.modifiers) ? i.modifiers.length : 0),
       0,
     );
-    let variationGroupsLive: number | null = null;
-    try {
-      const groups = await this.client.listMenuGroups(creds);
-      variationGroupsLive = Array.isArray(groups) ? groups.length : 0;
-    } catch (err) {
-      this.logger.warn(
-        `Could not read Chowdeck menu groups back after publishing: ` +
-          `${(err as Error).message}`,
-      );
+    const liveGroupIds = new Set<string>();
+    for (const entry of map.menu) {
+      for (const id of String(entry.menu_group_ids ?? '').split(',')) {
+        if (id.trim()) liveGroupIds.add(id.trim());
+      }
     }
+    const variationGroupsLive = liveGroupIds.size;
 
     integration.lastMenuSyncAt = new Date();
     await this.integrationRepo.update(
@@ -469,18 +467,38 @@ export class ChowdeckService {
     };
   }
 
+  /**
+   * The price the item is listed at on Chowdeck.
+   *
+   * A product with size variations is listed at its cheapest size, and each
+   * size is a modifier priced as the difference. Chowdeck adds a modifier's
+   * price ON TOP of the item price — their own upload example is
+   * `Size: regular 0 / large +500` — so listing at the product's own price and
+   * sending each size's full price, as this used to, charged a customer the
+   * base and the size together: ₦3,000 shawarma + ₦3,000 "Small" = ₦6,000.
+   */
+  static basePriceOf(product: ProductEntity): number {
+    const sizes = (product.variations ?? [])
+      .map((v) => Number(v.sellingPrice))
+      .filter((n) => n > 0);
+    if (sizes.length > 0) return Math.min(...sizes);
+    return Number(product.sellingPrice) || 0;
+  }
+
   /** Variations and add-on groups both become Chowdeck "modifiers". */
   private buildModifiers(product: ProductEntity) {
     const modifiers: unknown[] = [];
 
     if (product.variations?.length) {
+      const base = ChowdeckService.basePriceOf(product);
       modifiers.push({
         name: 'Options',
         minimum_selection: 1,
         maximum_selection: 1,
         items: product.variations.map((v) => ({
           name: v.name,
-          price: toKobo(Number(v.sellingPrice)),
+          // Difference over the listed (cheapest) size, never negative.
+          price: toKobo(Math.max(0, Number(v.sellingPrice) - base)),
           reference: v.id,
         })),
       });
@@ -542,7 +560,7 @@ export class ChowdeckService {
       );
       mapped += 1;
     }
-    return { mapped, unmapped };
+    return { mapped, unmapped, menu: menu ?? [] };
   }
 
   /**

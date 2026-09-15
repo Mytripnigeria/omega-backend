@@ -60,11 +60,13 @@ describe('Chowdeck variation publishing', () => {
       merchantReference: 'MERCH-1',
     } as never;
 
-    const build = (products: ReturnType<typeof productFixture>[]) => {
+    const build = (
+      products: ReturnType<typeof productFixture>[],
+      liveMenu: Array<Record<string, unknown>> = [],
+    ) => {
       const client = {
-        listMenu: jest.fn(async () => []),
+        listMenu: jest.fn(async () => liveMenu),
         bulkUploadMenu: jest.fn(async (_c: unknown, items: unknown[]) => items),
-        listMenuGroups: jest.fn(async () => []),
       };
       const service = new ChowdeckService(
         mockRepo([integration as never]) as never,
@@ -77,7 +79,7 @@ describe('Chowdeck variation publishing', () => {
       jest.spyOn(service, 'findWithSecret').mockResolvedValue(integration as never);
       jest
         .spyOn(service, 'rebuildMenuMap')
-        .mockResolvedValue({ mapped: products.length, unmapped: [] } as never);
+        .mockResolvedValue({ mapped: products.length, unmapped: [], menu: liveMenu } as never);
       return { service, client };
     };
 
@@ -121,46 +123,29 @@ describe('Chowdeck variation publishing', () => {
       expect(res.variationsSent).toBe(2);
     });
 
-    it('reads the groups back from Chowdeck and reports how many are live', async () => {
-      const { service, client } = build([withVariations()]);
-      client.listMenuGroups.mockResolvedValue([
-        { id: 1, name: 'Options', items: [] },
-        { id: 2, name: 'Extras', items: [] },
-      ] as never);
+    it('reports the modifier groups Chowdeck attached, read from menu_group_ids', async () => {
+      // The studio host that lists groups rejects the merchant key; the menu
+      // the merchant API returns carries each item's group ids instead.
+      const { service } = build([withVariations()], [
+        { id: 1, name: 'Jollof Rice', reference: 'p1', menu_group_ids: '4468459,4468457' },
+        { id: 2, name: 'Coke', reference: 'p2', menu_group_ids: null },
+        { id: 3, name: 'Suya', reference: 'p3', menu_group_ids: '4468459' },
+      ]);
 
       const res = await service.syncMenu('biz-1', 'store-1', 'int-1');
 
-      expect(client.listMenuGroups).toHaveBeenCalled();
+      // Two distinct groups across the menu, one shared by two items.
       expect(res.variationGroupsLive).toBe(2);
     });
 
-    it('reports zero live groups distinctly from an unanswered check', async () => {
-      const { service, client } = build([withVariations()]);
-      client.listMenuGroups.mockResolvedValue([] as never);
+    it('reports zero live groups when no item carries one', async () => {
+      const { service } = build([withVariations()], [
+        { id: 1, name: 'Jollof Rice', reference: 'p1', menu_group_ids: '' },
+      ]);
 
       const res = await service.syncMenu('biz-1', 'store-1', 'int-1');
 
       expect(res.variationGroupsLive).toBe(0);
-    });
-
-    it('reports null — not zero — when the check itself could not run', async () => {
-      // "We could not ask" must never be presented as "there are none".
-      const { service, client } = build([withVariations()]);
-      client.listMenuGroups.mockRejectedValue(new Error('403 Forbidden') as never);
-
-      const res = await service.syncMenu('biz-1', 'store-1', 'int-1');
-
-      expect(res.variationGroupsLive).toBeNull();
-    });
-
-    it('does not fail the publish when the read-back fails', async () => {
-      const { service, client } = build([withVariations()]);
-      client.listMenuGroups.mockRejectedValue(new Error('studio host down') as never);
-
-      const res = await service.syncMenu('biz-1', 'store-1', 'int-1');
-
-      expect(res.published).toBe(1);
-      expect(client.bulkUploadMenu).toHaveBeenCalled();
     });
 
     it('sends no modifier group for a product with neither variations nor add-ons', async () => {
