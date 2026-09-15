@@ -305,10 +305,30 @@ export class CloveService {
       }
     }
 
+    /**
+     * SKUs that would collide on Cloove.
+     *
+     * Cloove keeps SKUs unique per workspace and answers a collision with a
+     * bare "An unexpected error occurred" — no field, no hint. This catalogue
+     * reuses SKUs freely (a product and its Small variant share one; two
+     * pizzas share three), which is what left 21 of 50 products failing on
+     * every publish. A SKU is optional on Cloove, so any SKU that is not
+     * unique across the store's products and variants is simply not sent.
+     */
+    const skuOwners = new Map<string, number>();
     for (const product of priced) {
-      const input = this.buildProductInput(product);
+      if (product.sku) skuOwners.set(product.sku, (skuOwners.get(product.sku) ?? 0) + 1);
+      for (const v of product.variations ?? []) {
+        if (v.sku) skuOwners.set(v.sku, (skuOwners.get(v.sku) ?? 0) + 1);
+      }
+    }
+    const collidingSkus = new Set(
+      [...skuOwners].filter(([, n]) => n > 1).map(([sku]) => sku),
+    );
+
+    for (const product of priced) {
       const knownCloveId = cloveIdByProduct.get(product.id);
-      try {
+      const publish = async (input: CloveProductInput) => {
         if (knownCloveId) {
           const res = await this.client.updateProduct(creds, knownCloveId, input);
           updated += 1;
@@ -318,8 +338,29 @@ export class CloveService {
           created += 1;
           await this.rememberMapping(integration, product.id, res.id, res.name);
         }
+      };
+      const input = this.buildProductInput(product, collidingSkus);
+      try {
+        await publish(input);
       } catch (err) {
-        failures.push(`${product.name}: ${(err as Error).message}`);
+        // A SKU can also collide with something that exists only on Cloove's
+        // side (a product the merchant created there), which nothing in our
+        // catalogue can predict. Cloove gives no reason, so when the input
+        // carried any SKU at all, try once more with none before giving up.
+        const hadSku = !!input.sku || (input.variants ?? []).some((v) => v.sku);
+        if (!hadSku) {
+          failures.push(`${product.name}: ${(err as Error).message}`);
+          continue;
+        }
+        try {
+          await publish(this.buildProductInput(product, 'all'));
+          this.logger.warn(
+            `Cloove accepted "${product.name}" only without its SKU(s) — ` +
+              `they collide with something already on Cloove.`,
+          );
+        } catch (retryErr) {
+          failures.push(`${product.name}: ${(retryErr as Error).message}`);
+        }
       }
     }
 
@@ -389,19 +430,29 @@ export class CloveService {
    * `productOptions` is silently discarded by their API, variants are not, so
    * variants are the only shape that actually carries per-size pricing across.
    */
-  private buildProductInput(product: ProductEntity): CloveProductInput {
+  /**
+   * @param omitSkus SKUs to leave out (they would collide on Cloove), or
+   *   `'all'` to send none — the retry after Cloove rejects a publish.
+   */
+  private buildProductInput(
+    product: ProductEntity,
+    omitSkus: Set<string> | 'all' = new Set(),
+  ): CloveProductInput {
+    const keep = (sku?: string | null): sku is string =>
+      !!sku && omitSkus !== 'all' && !omitSkus.has(sku);
+
     const variants: CloveVariantInput[] = (product.variations ?? []).map((v) => ({
       name: v.name,
       // Cloove takes naira decimals, not kobo.
       price: Number(v.sellingPrice),
-      ...(v.sku ? { sku: v.sku } : {}),
+      ...(keep(v.sku) ? { sku: v.sku } : {}),
     }));
 
     return {
       name: product.name,
       price: Number(product.sellingPrice),
       ...(product.description ? { description: product.description } : {}),
-      ...(product.sku ? { sku: product.sku } : {}),
+      ...(keep(product.sku) ? { sku: product.sku } : {}),
       ...(variants.length ? { variants } : {}),
     };
   }

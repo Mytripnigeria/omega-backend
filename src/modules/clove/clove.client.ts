@@ -172,7 +172,9 @@ export class CloveClient {
           `${message}. Check you used the SECRET key (clv_live_sk_…) — a ` +
           `publishable key (clv_live_pk_…) is rejected by the Cloove API.`;
       }
-      this.logger.warn(`${method} ${path} -> ${res.status}: ${message}`);
+      this.logger.warn(
+        `${method} ${path} -> ${res.status}: ${message} · body: ${text.slice(0, 300)}`,
+      );
       throw new CloveApiError(message, res.status);
     }
     return payload as T;

@@ -8,8 +8,10 @@ import {
   Param,
   Post,
   Put,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import {
   ApiBearerAuth,
@@ -47,7 +49,7 @@ export class ChowdeckController {
   })
   @ApiParam({ name: 'storeId', format: 'uuid' })
   @Get(':storeId')
-  async get(@BusinessId() businessId: string, @Param('storeId') storeId: string) {
+  async get(@Req() req: Request, @BusinessId() businessId: string, @Param('storeId') storeId: string) {
     const config = await this.service.getConfig(businessId, storeId);
     if (!config) return null;
     return {
@@ -55,7 +57,7 @@ export class ChowdeckController {
       webhookUrl: await this.service.webhookUrl(
         businessId,
         storeId,
-        this.publicBase(),
+        this.publicBase(req),
       ),
     };
   }
@@ -70,7 +72,7 @@ export class ChowdeckController {
   @ApiParam({ name: 'storeId', format: 'uuid' })
   @Get(':storeId/channels')
   async channels(
-    @BusinessId() businessId: string,
+    @Req() req: Request, @BusinessId() businessId: string,
     @Param('storeId') storeId: string,
   ) {
     const rows = await this.service.listChannels(businessId, storeId);
@@ -80,7 +82,7 @@ export class ChowdeckController {
         webhookUrl: await this.service.webhookUrl(
           businessId,
           storeId,
-          this.publicBase(),
+          this.publicBase(req),
           c.id,
         ),
       })),
@@ -91,7 +93,7 @@ export class ChowdeckController {
   @ApiParam({ name: 'storeId', format: 'uuid' })
   @Post(':storeId/channels')
   async addChannel(
-    @BusinessId() businessId: string,
+    @Req() req: Request, @BusinessId() businessId: string,
     @Param('storeId') storeId: string,
     @Body() dto: UpsertChowdeckIntegrationDto,
   ) {
@@ -104,7 +106,7 @@ export class ChowdeckController {
       webhookUrl: await this.service.webhookUrl(
         businessId,
         storeId,
-        this.publicBase(),
+        this.publicBase(req),
         saved.id,
       ),
     };
@@ -115,7 +117,7 @@ export class ChowdeckController {
   @ApiParam({ name: 'channelId', format: 'uuid' })
   @Put(':storeId/channels/:channelId')
   async updateChannel(
-    @BusinessId() businessId: string,
+    @Req() req: Request, @BusinessId() businessId: string,
     @Param('storeId') storeId: string,
     @Param('channelId') channelId: string,
     @Body() dto: UpsertChowdeckIntegrationDto,
@@ -131,7 +133,7 @@ export class ChowdeckController {
       webhookUrl: await this.service.webhookUrl(
         businessId,
         storeId,
-        this.publicBase(),
+        this.publicBase(req),
         saved.id,
       ),
     };
@@ -204,7 +206,7 @@ export class ChowdeckController {
   @ApiParam({ name: 'storeId', format: 'uuid' })
   @Put(':storeId')
   async upsert(
-    @BusinessId() businessId: string,
+    @Req() req: Request, @BusinessId() businessId: string,
     @Param('storeId') storeId: string,
     @Body() dto: UpsertChowdeckIntegrationDto,
   ) {
@@ -214,7 +216,7 @@ export class ChowdeckController {
       webhookUrl: await this.service.webhookUrl(
         businessId,
         storeId,
-        this.publicBase(),
+        this.publicBase(req),
       ),
     };
   }
@@ -257,12 +259,26 @@ export class ChowdeckController {
     return this.service.removeConfig(businessId, storeId);
   }
 
-  /** Public origin webhooks should be sent to. */
-  private publicBase(): string {
-    return (
+  /**
+   * Public origin webhooks should be sent to — this API's own.
+   *
+   * `PUBLIC_URL` when set; otherwise the origin the current request arrived
+   * on, read through the proxy headers. The previous fallback was the
+   * dashboard's hostname, so with the env var unset in production the URL
+   * handed to Chowdeck pointed at a static Vercel page: every real order
+   * webhook was answered with the SPA's index.html and none reached us.
+   */
+  private publicBase(req: Request): string {
+    const configured =
       this.config.get<string>('PUBLIC_URL') ??
-      this.config.get<string>('APP_PUBLIC_URL') ??
-      'https://app.omega.com.ng'
-    );
+      this.config.get<string>('APP_PUBLIC_URL');
+    if (configured) return configured.replace(/\/+$/, '');
+    const proto = String(req.headers['x-forwarded-proto'] ?? req.protocol ?? 'https')
+      .split(',')[0]
+      .trim();
+    const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '')
+      .split(',')[0]
+      .trim();
+    return `${proto}://${host}`;
   }
 }

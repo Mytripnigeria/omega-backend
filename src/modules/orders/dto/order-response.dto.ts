@@ -229,6 +229,19 @@ export class OrderResponseDto {
   @Expose()
   deliveryAddress: Record<string, unknown> | null;
 
+  /**
+   * Rider handling a marketplace delivery (Chowdeck sends theirs on the
+   * order). Stored on the row since round 11 but never serialised, so the
+   * dashboard's Delivery tab could not show it.
+   */
+  @ApiPropertyOptional({ nullable: true, example: 'Musa Ibrahim' })
+  @Expose()
+  riderName: string | null;
+
+  @ApiPropertyOptional({ nullable: true, example: '+2348030000202' })
+  @Expose()
+  riderPhone: string | null;
+
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
   @Expose()
   @Type(() => Date)

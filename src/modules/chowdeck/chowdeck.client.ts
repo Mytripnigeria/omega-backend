@@ -145,7 +145,19 @@ export class ChowdeckApiError extends HttpException {
     readonly httpStatus: number,
     readonly body: unknown,
   ) {
-    super(`Chowdeck: ${message}`, HttpStatus.BAD_GATEWAY);
+    // A 4xx from Chowdeck is something the merchant can fix — a revoked key
+    // ("Invalid permissions"), a bad reference, a rejected payload — so it
+    // goes back as 400 with the message intact. It must NOT go back as 502:
+    // the edge replaces 5xx bodies with its own error page and drops the CORS
+    // headers, so the browser sees a bare network failure and the dashboard
+    // reports "Could not reach the server" for what was actually Chowdeck
+    // saying the key is invalid. 502 is kept for genuine upstream failures.
+    super(
+      `Chowdeck: ${message}`,
+      httpStatus >= 400 && httpStatus < 500
+        ? HttpStatus.BAD_REQUEST
+        : HttpStatus.BAD_GATEWAY,
+    );
     this.name = 'ChowdeckApiError';
   }
 
