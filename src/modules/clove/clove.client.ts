@@ -14,6 +14,17 @@ import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
  *     library agents, which reads as a puzzling 403
  *   - products carry **no external-reference field**, so the productId ↔
  *     cloveProductId map has to be kept on our side
+ *   - the READ side is camelCase (`isActive`, `basePrice`) but the WRITE side
+ *     is snake_case (`is_active`, `image_urls`, `store_inventory`). A camelCase
+ *     field on a write is silently ignored — no error, no effect — which is
+ *     why images, stock and active flags never "took" until this was found
+ *     (docs.clooveai.com/products-api, confirmed against the live API)
+ *   - `quantity` seeds stock on create only; on an update stock moves through
+ *     `store_inventory` or per-variant `stock_quantity`
+ *   - DELETE is a soft delete: the id never comes back — and the SKU stays
+ *     reserved, so re-creating it anywhere answers a bare 500
+ *   - rate limit: 120 calls per window (`x-ratelimit-limit`), 429 with a
+ *     `Retry-After` beyond it
  */
 export interface CloveCredentials {
   apiKey: string;
@@ -21,9 +32,12 @@ export interface CloveCredentials {
 }
 
 export interface CloveVariantInput {
+  /** Existing Cloove variant id — keeps the id stable across an update. */
+  id?: string;
   name: string;
   price: number;
   sku?: string;
+  stock_quantity?: number;
 }
 
 export interface CloveProductInput {
@@ -31,8 +45,17 @@ export interface CloveProductInput {
   price: number;
   description?: string;
   unit?: string;
+  /** Applied to the default variant only — ignored when `variants` is sent. */
   sku?: string;
-  categoryId?: string;
+  category_id?: string;
+  is_active?: boolean;
+  /** Public HTTPS URLs; the first becomes the primary image. */
+  image_urls?: string[];
+  /** Initial stock for the default variant — honoured on create only. */
+  quantity?: number;
+  /** Stock per Cloove store — the way stock moves on an update. */
+  store_inventory?: Array<{ store_id: string; stock_quantity: number }>;
+  /** When present this is the desired FINAL variant set, not an append. */
   variants?: CloveVariantInput[];
 }
 
@@ -44,6 +67,10 @@ export interface CloveProduct {
   unit: string | null;
   isActive: boolean;
   categoryId: string | null;
+  /** Modifier-only items (extras) — not menu entries in their own right. */
+  isExtraOnly?: boolean;
+  images?: Array<{ id?: string; url: string; isPrimary?: boolean }>;
+  stores?: Array<{ id: string; name?: string }>;
   variants?: Array<{
     id: string;
     name: string | null;
@@ -112,7 +139,11 @@ export class CloveApiError extends HttpException {
     const clientFixable = [400, 401, 403, 404, 409, 422].includes(upstreamStatus);
     super(
       `Cloove: ${message}`,
-      clientFixable ? HttpStatus.BAD_REQUEST : HttpStatus.BAD_GATEWAY,
+      upstreamStatus === 429
+        ? HttpStatus.TOO_MANY_REQUESTS
+        : clientFixable
+          ? HttpStatus.BAD_REQUEST
+          : HttpStatus.BAD_GATEWAY,
     );
     this.upstreamStatus = upstreamStatus;
   }
@@ -122,11 +153,27 @@ export class CloveApiError extends HttpException {
 export class CloveClient {
   private readonly logger = new Logger(CloveClient.name);
 
+  /** Tries per call when Cloove answers 429 — a publish is ~80 calls. */
+  private static readonly MAX_ATTEMPTS = 3;
+
+  /**
+   * How long to wait before attempt N+1 after a 429. Cloove's window is a
+   * minute and its `Retry-After` is usually absent (`meta.retryAfter: null`),
+   * so the fallback climbs to cover a full window: 15 s, then 30 s.
+   */
+  static retryDelaySeconds(retryAfterHeader: string | null, attempt: number): number {
+    if (retryAfterHeader !== null && Number.isFinite(Number(retryAfterHeader))) {
+      return Math.min(Math.max(Number(retryAfterHeader), 0), 45);
+    }
+    return [15, 30][attempt - 1] ?? 30;
+  }
+
   private async request<T>(
     creds: CloveCredentials,
     method: string,
     path: string,
     body?: unknown,
+    attempt = 1,
   ): Promise<T> {
     const base = (creds.baseUrl || 'https://api.clooveai.com').replace(/\/+$/, '');
     const res = await fetch(`${base}${path}`, {
@@ -141,6 +188,18 @@ export class CloveClient {
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+
+    if (res.status === 429 && attempt < CloveClient.MAX_ATTEMPTS) {
+      // 120 calls per window; Cloove says how long to wait. Waiting here,
+      // inside the call, keeps a publish that brushes the limit correct
+      // rather than half-done.
+      const seconds = CloveClient.retryDelaySeconds(res.headers.get('retry-after'), attempt);
+      this.logger.warn(
+        `${method} ${path} -> 429, retrying in ${seconds}s (attempt ${attempt}/${CloveClient.MAX_ATTEMPTS})`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+      return this.request<T>(creds, method, path, body, attempt + 1);
+    }
 
     const text = await res.text();
     let parsed: unknown;
@@ -164,6 +223,9 @@ export class CloveClient {
         .filter(Boolean)
         .join('; ');
       let message = detail || payload.message || payload.error || `HTTP ${res.status}`;
+      if (res.status === 429) {
+        message = `${message} Cloove allows 120 calls a minute — publish again in a minute.`;
+      }
       if (res.status === 401 || res.status === 403) {
         // Name the most common cause outright: Cloove issues both a
         // publishable key (clv_live_pk_…) and a secret key (clv_live_sk_…),
@@ -228,6 +290,23 @@ export class CloveClient {
       input,
     );
     return res.data;
+  }
+
+  /** One product as Cloove holds it now, or null when it is gone. */
+  async getProduct(
+    creds: CloveCredentials,
+    cloveProductId: string,
+  ): Promise<CloveProduct | null> {
+    try {
+      const res = await this.request<{ data: CloveProduct }>(
+        creds,
+        'GET',
+        `/v1/products/${cloveProductId}`,
+      );
+      return res.data ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async deleteProduct(creds: CloveCredentials, cloveProductId: string): Promise<void> {

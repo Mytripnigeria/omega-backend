@@ -21,7 +21,7 @@ describe('CloveService.syncMenu', () => {
 
   const build = (
     products: ReturnType<typeof productFixture>[],
-    opts: { remote?: Array<{ id: string; name: string }>; mapped?: unknown[] } = {},
+    opts: { remote?: Array<Record<string, any>>; mapped?: unknown[] } = {},
   ) => {
     const integrationRepo = mockRepo([integration as never]);
     const menuMapRepo = mockRepo((opts.mapped ?? []) as never[]);
@@ -29,6 +29,8 @@ describe('CloveService.syncMenu', () => {
     const storeRepo = mockRepo([]);
     const client = {
       listAllProducts: jest.fn(async () => opts.remote ?? []),
+      deleteProduct: jest.fn(async () => undefined),
+      getProduct: jest.fn(async () => null),
       createProduct: jest.fn(async (_c: unknown, input: Record<string, any>) => ({
         id: `clove-new-${input.name}`,
         name: input.name,
@@ -171,8 +173,8 @@ describe('CloveService.syncMenu', () => {
     await service.syncMenu('biz-1', 'store-1', 'int-1');
 
     expect(client.createProduct.mock.calls[0][1].variants).toEqual([
-      { name: 'Small', price: 3000, sku: 'JR-S' },
-      { name: 'Large', price: 6000 },
+      { name: 'Small', price: 3000, sku: 'JR-S', stock_quantity: 20 },
+      { name: 'Large', price: 6000, stock_quantity: 20 },
     ]);
   });
 
@@ -199,20 +201,138 @@ describe('CloveService.syncMenu', () => {
     expect(client.createProduct).not.toHaveBeenCalled();
   });
 
-  it('updates through the stored map without re-reading the catalogue', async () => {
+  it('updates through the stored map, reading the catalogue once to mirror it', async () => {
     const { service, client } = build(
       [productFixture({ id: 'p1', name: 'Jollof Rice', sellingPrice: 4500 })],
-      { mapped: [{ integrationId: 'int-1', productId: 'p1', cloveProductId: 'clove-known' }] },
+      {
+        mapped: [{ integrationId: 'int-1', productId: 'p1', cloveProductId: 'clove-known' }],
+        remote: [{ id: 'clove-known', name: 'Jollof Rice' }],
+      },
     );
 
     const res = await service.syncMenu('biz-1', 'store-1', 'int-1');
 
-    expect(client.listAllProducts).not.toHaveBeenCalled();
+    expect(client.listAllProducts).toHaveBeenCalledTimes(1);
     expect(client.updateProduct).toHaveBeenCalledWith(
       expect.anything(),
       'clove-known',
       expect.anything(),
     );
     expect(res.updated).toBe(1);
+    expect(res.adopted).toBe(0);
+  });
+
+  /**
+   * Client feedback after the first fix: "it adds (without some items like
+   * image, sku, stock level)". Cloove's write API is snake_case; the camelCase
+   * fields sent before were silently dropped.
+   */
+  describe('image, SKU and stock', () => {
+    it('sends the image, SKU and stock Cloove needs, in snake_case', async () => {
+      const { service, client } = build([
+        productFixture({
+          id: 'p1',
+          name: 'Jollof Rice',
+          sellingPrice: 4500,
+          sku: 'JOL001',
+          stock: 25,
+          imageUrl: 'https://cdn.example/jollof.jpg',
+        }),
+      ]);
+
+      await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+      expect(client.createProduct.mock.calls[0][1]).toMatchObject({
+        name: 'Jollof Rice',
+        price: 4500,
+        sku: 'JOL001',
+        quantity: 25,
+        image_urls: ['https://cdn.example/jollof.jpg'],
+        is_active: true,
+      });
+    });
+
+    it('sends no image field when the product has none, rather than an empty list', async () => {
+      const { service, client } = build([
+        productFixture({ id: 'p1', name: 'Jollof Rice', sellingPrice: 4500, imageUrl: null }),
+      ]);
+
+      await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+      expect(client.createProduct.mock.calls[0][1]).not.toHaveProperty('image_urls');
+    });
+
+    it('moves stock through store_inventory on an update, since Cloove ignores quantity there', async () => {
+      const { service, client } = build(
+        [productFixture({ id: 'p1', name: 'Jollof Rice', sellingPrice: 4500, stock: 25 })],
+        {
+          mapped: [{ integrationId: 'int-1', productId: 'p1', cloveProductId: 'clove-known' }],
+          remote: [{ id: 'clove-known', name: 'Jollof Rice', stores: [{ id: 'st-1' }, { id: 'st-2' }] }],
+        },
+      );
+
+      await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+      const sent = client.updateProduct.mock.calls[0][2];
+      expect(sent.store_inventory).toEqual([
+        { store_id: 'st-1', stock_quantity: 25 },
+        { store_id: 'st-2', stock_quantity: 25 },
+      ]);
+      expect(sent).not.toHaveProperty('quantity');
+    });
+
+    it('carries Cloove variant ids across an update so sizes are corrected, not recreated', async () => {
+      const { service, client } = build(
+        [
+          productFixture({
+            id: 'p1',
+            name: 'Pizza',
+            sellingPrice: 9000,
+            variations: [
+              { id: 'v1', name: 'Small', sellingPrice: 9000, stock: 5 },
+              { id: 'v2', name: 'Large', sellingPrice: 12000, stock: 0 },
+            ],
+          }),
+        ],
+        {
+          mapped: [{ integrationId: 'int-1', productId: 'p1', cloveProductId: 'clove-pizza' }],
+          remote: [
+            {
+              id: 'clove-pizza',
+              name: 'Pizza',
+              variants: [{ id: 'cv-small', name: 'small', sku: null, price: '9000.00' }],
+            },
+          ],
+        },
+      );
+
+      await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+      expect(client.updateProduct.mock.calls[0][2].variants).toEqual([
+        { id: 'cv-small', name: 'Small', price: 9000, stock_quantity: 5 },
+        // Large is new on Cloove (no id) and, having no stock of its own,
+        // sells from the product's stock.
+        { name: 'Large', price: 12000, stock_quantity: 20 },
+      ]);
+    });
+
+    it('treats a product priced only through its sizes as priced, at the cheapest size', async () => {
+      const { service, client } = build([
+        productFixture({
+          id: 'p1',
+          name: 'Shawarma',
+          sellingPrice: 0,
+          variations: [
+            { id: 'v1', name: 'Large', sellingPrice: 6000 },
+            { id: 'v2', name: 'Small', sellingPrice: 3000 },
+          ],
+        }),
+      ]);
+
+      const res = await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+      expect(res.skippedNoPrice).toEqual([]);
+      expect(client.createProduct.mock.calls[0][1]).toMatchObject({ price: 3000 });
+    });
   });
 });

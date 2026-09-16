@@ -5,18 +5,52 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { CloveIntegrationEntity } from './entities/clove-integration.entity';
 import { CloveMenuItemEntity } from './entities/clove-menu-item.entity';
 import { UpsertCloveIntegrationDto } from './dto/clove-integration.dto';
 import {
+  CloveApiError,
   CloveClient,
   CloveCredentials,
+  CloveProduct,
   CloveProductInput,
   CloveVariantInput,
 } from './clove.client';
 import { ProductEntity } from '../products/entities/product.entity';
 import { StoreEntity } from '../store/entities/store.entity';
+
+/** The only join Cloove offers is the name, so compare them loosely. */
+const normalise = (name: string): string =>
+  (name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+/** Who holds a SKU: a size is identified by its own id, or its position. */
+const variantKey = (
+  product: { id: string },
+  variation: { id?: string },
+  index: number,
+): string => `${product.id}#${variation.id ?? index}`;
+
+/**
+ * Runs `fn` over `items` with at most `limit` in flight. Cloove answers each
+ * call in roughly 0.7 s; done one at a time, a 50-product publish took 40 s —
+ * long enough to trip a proxy timeout behind a single button click.
+ */
+const mapPool = async <T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> => {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next];
+      next += 1;
+      await fn(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+};
 
 const SECRET_COLUMNS = {
   id: true,
@@ -216,10 +250,15 @@ export class CloveService {
   /**
    * Publishes this store's active products to Cloove and keeps the id map.
    *
-   * Cloove has no external-reference field, so "have I published this already?"
-   * is answered by our own map rather than by anything Cloove echoes back —
-   * mapped products are PATCHed in place, unmapped ones are created. That makes
-   * a second publish a correction rather than a duplicate catalogue.
+   * Cloove is treated as a mirror of this store's menu, the way Chowdeck is:
+   *   1. everything active and priced here is created or corrected there;
+   *   2. anything there that is not on this menu is deleted.
+   *
+   * Cloove has no external-reference field, so "have I published this
+   * already?" is answered by our own map rather than by anything Cloove echoes
+   * back — mapped products are PATCHed in place, unmapped ones are created,
+   * and anything the merchant built in Cloove under the same name is adopted
+   * into the map instead of duplicated.
    */
   async syncMenu(businessId: string, storeId: string, channelId?: string) {
     const integration = await this.requireChannel(businessId, storeId, channelId);
@@ -239,11 +278,11 @@ export class CloveService {
      * Never publish an unpriced product. `price` is the cost price and
      * `sellingPrice` the customer-facing one, and `sellingPrice` defaults to 0
      * rather than null — so an unpriced item would be listed free rather than
-     * simply omitted.
+     * simply omitted. A product priced only through its sizes counts as priced.
      */
-    const priced = products.filter((p) => Number(p.sellingPrice) > 0);
+    const priced = products.filter((p) => CloveService.basePriceOf(p) > 0);
     const skippedNoPrice = products
-      .filter((p) => Number(p.sellingPrice) <= 0)
+      .filter((p) => CloveService.basePriceOf(p) <= 0)
       .map((p) => p.name);
     if (priced.length === 0) {
       throw new BadRequestException(
@@ -262,47 +301,114 @@ export class CloveService {
     let created = 0;
     let updated = 0;
     let adopted = 0;
+    let removed = 0;
+    const removedNames: string[] = [];
+    const skuConflicts: string[] = [];
     const failures: string[] = [];
+
+    /**
+     * The catalogue as Cloove holds it right now. Adoption, pruning and
+     * carrying variant ids across an update all lean on it. A failed read must
+     * not stop the publish — it only means falling back to create-or-update
+     * by map alone, with no pruning this time.
+     */
+    let remote: CloveProduct[] | null = null;
+    try {
+      remote = await this.client.listAllProducts(creds);
+    } catch (err) {
+      this.logger.warn(
+        `Cloove catalogue read failed, publishing by map only: ${(err as Error).message}`,
+      );
+    }
+    const remoteById = new Map((remote ?? []).map((r) => [r.id, r]));
+
+    if (remote) {
+      // A mapped product the merchant deleted on Cloove's side is gone for
+      // good (their delete is soft; the id never comes back). Forget the row
+      // so the product is adopted or re-created rather than PATCHed into a 404.
+      for (const row of existingMap) {
+        if (remoteById.has(row.cloveProductId)) continue;
+        await this.menuMapRepo.delete({ id: row.id });
+        cloveIdByProduct.delete(row.productId);
+      }
+    }
 
     /**
      * Adopt products that already exist on Cloove.
      *
-     * Cloove has no external-reference field, so the only record that a
-     * product is already published is our own map — and that map is empty for
-     * anything the merchant built in Cloove directly, or published before this
-     * integration existed. Creating blindly then means asking Cloove to add a
-     * product it already has, which it refuses because product names are
-     * unique per business. That is exactly what produced a publish reporting
-     * "22 failed" against a catalogue that overlapped an existing Cloove menu.
+     * Our map is empty for anything the merchant built in Cloove directly, or
+     * published before this integration existed. Creating blindly then means
+     * asking Cloove to add a product it already has, which it refuses because
+     * product names are unique per business. That is exactly what produced a
+     * publish reporting "22 failed" against a catalogue that overlapped an
+     * existing Cloove menu.
      *
      * Matching on the normalised name is the only join available (there is no
-     * shared identifier), so an existing entry is adopted into the map and
-     * PATCHed in place instead of being duplicated.
+     * shared identifier). Every active product takes part, priced or not, so
+     * an unpriced item that already exists on Cloove is recognised as ours and
+     * left alone rather than pruned as a stranger.
      */
-    const normalise = (name: string) =>
-      name.toLowerCase().replace(/[^a-z0-9]+/g, '');
-    const unmapped = priced.filter((p) => !cloveIdByProduct.has(p.id));
-    if (unmapped.length > 0) {
-      try {
-        const remote = await this.client.listAllProducts(creds);
-        const remoteByName = new Map<string, string>();
-        for (const r of remote) {
-          if (r?.name && r?.id) remoteByName.set(normalise(r.name), r.id);
+    if (remote) {
+      const remoteByName = new Map<string, string>();
+      for (const r of remote) {
+        if (r?.name && r?.id && !r.isExtraOnly) {
+          remoteByName.set(normalise(r.name), r.id);
         }
-        for (const product of unmapped) {
-          const match = remoteByName.get(normalise(product.name));
-          if (!match) continue;
-          cloveIdByProduct.set(product.id, match);
-          await this.rememberMapping(integration, product.id, match, product.name);
-          adopted += 1;
-        }
-      } catch (err) {
-        // A failed reconciliation must not stop the publish — it only means
-        // we fall back to the previous create-blindly behaviour.
-        this.logger.warn(
-          `Cloove catalogue reconciliation failed: ${(err as Error).message}`,
-        );
       }
+      const claimed = new Set(cloveIdByProduct.values());
+      for (const product of products) {
+        if (cloveIdByProduct.has(product.id)) continue;
+        const match = remoteByName.get(normalise(product.name));
+        if (!match || claimed.has(match)) continue;
+        cloveIdByProduct.set(product.id, match);
+        claimed.add(match);
+        await this.rememberMapping(integration, product.id, match, product.name);
+        adopted += 1;
+      }
+    }
+
+    /**
+     * Prune: delete from Cloove whatever is not on this menu.
+     *
+     * This is the Chowdeck contract the merchant asked for ("just like
+     * chowdeck, it should delete products that are not on our omega menu"),
+     * and it is also what makes the publish fit at all: Cloove caps the
+     * catalogue per plan (50 on this merchant's), so the strangers have to go
+     * BEFORE the creates or every new product is refused with "You have
+     * reached the product limit for your plan".
+     *
+     * Kept, in order of caution:
+     *   - anything mapped to one of this store's active products;
+     *   - anything mapped by a sibling channel that shares this API key — two
+     *     of our stores publishing into one Cloove workspace must not delete
+     *     each other's menu;
+     *   - Cloove's extras-only items, which are modifiers hanging off other
+     *     products rather than menu entries, and which nothing here replaces.
+     */
+    if (remote) {
+      const keep = new Set<string>();
+      for (const product of products) {
+        const id = cloveIdByProduct.get(product.id);
+        if (id) keep.add(id);
+      }
+      for (const id of await this.cloveIdsHeldBySiblings(integration)) keep.add(id);
+
+      const strangers = remote.filter((r) => !keep.has(r.id) && !r.isExtraOnly);
+      await mapPool(strangers, CloveService.CONCURRENCY, async (r) => {
+        try {
+          await this.client.deleteProduct(creds, r.id);
+          removed += 1;
+          removedNames.push(r.name);
+          remoteById.delete(r.id);
+          // Rows for products that have since been deactivated point here.
+          await this.menuMapRepo.delete({
+            integrationId: integration.id,
+            cloveProductId: r.id,
+          });
+        } catch (err) {
+          failures.push(`Remove ${r.name}: ${(err as Error).message}`);
+        }
+      });
     }
 
     /**
@@ -312,22 +418,34 @@ export class CloveService {
      * bare "An unexpected error occurred" — no field, no hint. This catalogue
      * reuses SKUs freely (a product and its Small variant share one; two
      * pizzas share three), which is what left 21 of 50 products failing on
-     * every publish. A SKU is optional on Cloove, so any SKU that is not
-     * unique across the store's products and variants is simply not sent.
+     * every publish. A SKU is optional on Cloove, so each SKU is sent exactly
+     * once — with its first holder in menu order — and left off any later
+     * one. Where a product has sizes, the sizes are the holders: Cloove pins a
+     * product-level SKU to the default variant, and a product with sizes has
+     * no default variant to pin it to.
      */
-    const skuOwners = new Map<string, number>();
+    const skuOwner = new Map<string, string>();
+    const claimSku = (sku: string | null | undefined, owner: string) => {
+      if (sku && !skuOwner.has(sku)) skuOwner.set(sku, owner);
+    };
     for (const product of priced) {
-      if (product.sku) skuOwners.set(product.sku, (skuOwners.get(product.sku) ?? 0) + 1);
-      for (const v of product.variations ?? []) {
-        if (v.sku) skuOwners.set(v.sku, (skuOwners.get(v.sku) ?? 0) + 1);
+      const variations = product.variations ?? [];
+      if (variations.length > 0) {
+        variations.forEach((v, i) => claimSku(v.sku, variantKey(product, v, i)));
+      } else {
+        claimSku(product.sku, product.id);
       }
     }
-    const collidingSkus = new Set(
-      [...skuOwners].filter(([, n]) => n > 1).map(([sku]) => sku),
-    );
+    const owns = (sku: string, owner: string) => skuOwner.get(sku) === owner;
 
-    for (const product of priced) {
+    const skusIn = (input: CloveProductInput): string[] =>
+      [input.sku, ...(input.variants ?? []).map((v) => v.sku)].filter(
+        (sku): sku is string => !!sku,
+      );
+
+    await mapPool(priced, CloveService.CONCURRENCY, async (product) => {
       const knownCloveId = cloveIdByProduct.get(product.id);
+      const current = knownCloveId ? (remoteById.get(knownCloveId) ?? null) : null;
       const publish = async (input: CloveProductInput) => {
         if (knownCloveId) {
           const res = await this.client.updateProduct(creds, knownCloveId, input);
@@ -339,30 +457,57 @@ export class CloveService {
           await this.rememberMapping(integration, product.id, res.id, res.name);
         }
       };
-      const input = this.buildProductInput(product, collidingSkus);
+      const input = this.buildProductInput(product, { owns, current });
       try {
         await publish(input);
+        return;
       } catch (err) {
-        // A SKU can also collide with something that exists only on Cloove's
-        // side (a product the merchant created there), which nothing in our
-        // catalogue can predict. Cloove gives no reason, so when the input
-        // carried any SKU at all, try once more with none before giving up.
-        const hadSku = !!input.sku || (input.variants ?? []).some((v) => v.sku);
-        if (!hadSku) {
+        /**
+         * A SKU can also collide with something nothing here can see:
+         * Cloove keeps the SKUs of soft-deleted products reserved (verified —
+         * re-creating a deleted SKU is a bare 500), and a merchant who built
+         * a product in Cloove may hold a SKU on a different item. Cloove
+         * gives no reason, so when the input carried any SKU, try again with
+         * only the SKUs already live on this very product, then with none.
+         */
+        const sent = skusIn(input);
+        // Only Cloove's bare 500 is the collision signature. A 429, a 422 or a
+        // 404 says something else, and dropping SKUs over it would throw away
+        // SKUs for nothing — which is exactly what a rate-limited publish did.
+        const skuCollision = err instanceof CloveApiError && err.upstreamStatus === 500;
+        if (sent.length === 0 || !skuCollision) {
           failures.push(`${product.name}: ${(err as Error).message}`);
-          continue;
+          return;
         }
-        try {
-          await publish(this.buildProductInput(product, 'all'));
-          this.logger.warn(
-            `Cloove accepted "${product.name}" only without its SKU(s) — ` +
-              `they collide with something already on Cloove.`,
-          );
-        } catch (retryErr) {
-          failures.push(`${product.name}: ${(retryErr as Error).message}`);
+        const seen = new Set<string>([sent.join('|')]);
+        const fallbacks = [
+          this.buildProductInput(product, { skus: 'current', current }),
+          this.buildProductInput(product, { skus: 'none', current }),
+        ].filter((alt) => {
+          const key = skusIn(alt).join('|');
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        let lastErr = err;
+        for (const alt of fallbacks) {
+          try {
+            await publish(alt);
+            const kept = skusIn(alt);
+            const dropped = sent.filter((sku) => !kept.includes(sku));
+            skuConflicts.push(`${product.name}: ${dropped.join(', ')}`);
+            this.logger.warn(
+              `Cloove accepted "${product.name}" only without ${dropped.join(', ')} — ` +
+                `already held on Cloove (often by a deleted product).`,
+            );
+            return;
+          } catch (retryErr) {
+            lastErr = retryErr;
+          }
         }
+        failures.push(`${product.name}: ${(lastErr as Error).message}`);
       }
-    }
+    });
 
     integration.lastMenuSyncAt = new Date();
     await this.integrationRepo.update(
@@ -378,11 +523,42 @@ export class CloveService {
       updated,
       /** Products already on Cloove that this publish claimed and updated. */
       adopted,
+      /** Cloove products deleted because they are not on this store's menu. */
+      removed,
+      removedNames,
+      /**
+       * SKUs Cloove refused, per product — published without them. Cloove
+       * keeps a deleted product's SKU reserved, so this is usually "a product
+       * with that SKU was deleted on Cloove"; the merchant can change the SKU
+       * here or ask Cloove to purge it.
+       */
+      skuConflicts,
       failures,
       mapped: await this.menuMapRepo.count({
         where: { integrationId: integration.id },
       }),
     };
+  }
+
+  /**
+   * Cloove ids published by other channels on this business that use the
+   * same key — the same Cloove workspace — and so are never ours to delete.
+   */
+  private async cloveIdsHeldBySiblings(
+    integration: CloveIntegrationEntity,
+  ): Promise<string[]> {
+    const all = await this.integrationRepo.find({
+      where: { businessId: integration.businessId },
+      select: { ...SECRET_COLUMNS },
+    });
+    const siblings = all.filter(
+      (s) => s.id !== integration.id && s.apiKey === integration.apiKey,
+    );
+    if (siblings.length === 0) return [];
+    const rows = await this.menuMapRepo.find({
+      where: { integrationId: In(siblings.map((s) => s.id)) },
+    });
+    return rows.map((r) => r.cloveProductId);
   }
 
   /** Publishes exactly one product — the "post one product" smoke test. */
@@ -402,17 +578,20 @@ export class CloveService {
       throw new NotFoundException('Product not found in this store');
     }
 
-    const input = this.buildProductInput(product);
     const known = await this.menuMapRepo.findOne({
       where: { integrationId: integration.id, productId },
     });
-    const res = known
-      ? await this.client.updateProduct(creds, known.cloveProductId, input)
+    const current = known
+      ? await this.client.getProduct(creds, known.cloveProductId)
+      : null;
+    const input = this.buildProductInput(product, { current });
+    const res = current
+      ? await this.client.updateProduct(creds, current.id, input)
       : await this.client.createProduct(creds, input);
     await this.rememberMapping(integration, product.id, res.id, res.name);
 
     return {
-      action: known ? 'updated' : 'created',
+      action: current ? 'updated' : 'created',
       productId: product.id,
       productName: product.name,
       cloveProductId: res.id,
@@ -426,35 +605,115 @@ export class CloveService {
   }
 
   /**
-   * Our product as Cloove expects it. Variations become Cloove **variants** —
-   * `productOptions` is silently discarded by their API, variants are not, so
-   * variants are the only shape that actually carries per-size pricing across.
+   * The price a product is listed at: the cheapest size when it is priced
+   * through its sizes, otherwise its own selling price.
    */
+  static basePriceOf(product: ProductEntity): number {
+    const sizes = (product.variations ?? [])
+      .map((v) => Number(v.sellingPrice))
+      .filter((n) => n > 0);
+    if (sizes.length > 0) return Math.min(...sizes);
+    return Number(product.sellingPrice) || 0;
+  }
+
   /**
-   * @param omitSkus SKUs to leave out (they would collide on Cloove), or
-   *   `'all'` to send none — the retry after Cloove rejects a publish.
+   * Cloove calls in flight at once during a publish. Three keeps a 50-product
+   * publish around ten seconds without bursting past the 120-per-window limit.
+   */
+  private static readonly CONCURRENCY = 3;
+
+  /** Stock as a whole number Cloove will accept. */
+  private static stockOf(value: unknown): number {
+    return Math.max(0, Math.trunc(Number(value) || 0));
+  }
+
+  /**
+   * Our product as Cloove expects it — snake_case on the write side.
+   *
+   * Variations become Cloove **variants**, the only shape that carries
+   * per-size pricing across, and keep their Cloove ids on an update so the
+   * merchant's WhatsApp catalogue does not see every size replaced on each
+   * publish. Stock and image go along: a product created without stock reads
+   * as sold out on the Cloove bot, and this is what the merchant meant by
+   * "it adds without image, sku, stock level".
    */
   private buildProductInput(
     product: ProductEntity,
-    omitSkus: Set<string> | 'all' = new Set(),
+    opts: {
+      /**
+       * Which SKUs to send: those this product holds (default); only those
+       * already live on the product at Cloove; or none. The last two are the
+       * retries after Cloove rejects a publish over a SKU it already has.
+       */
+      skus?: 'owned' | 'current' | 'none';
+      owns?: (sku: string, owner: string) => boolean;
+      /** The product as Cloove holds it now, when this is an update. */
+      current?: CloveProduct | null;
+    } = {},
   ): CloveProductInput {
-    const keep = (sku?: string | null): sku is string =>
-      !!sku && omitSkus !== 'all' && !omitSkus.has(sku);
-
-    const variants: CloveVariantInput[] = (product.variations ?? []).map((v) => ({
-      name: v.name,
-      // Cloove takes naira decimals, not kobo.
-      price: Number(v.sellingPrice),
-      ...(keep(v.sku) ? { sku: v.sku } : {}),
-    }));
-
-    return {
-      name: product.name,
-      price: Number(product.sellingPrice),
-      ...(product.description ? { description: product.description } : {}),
-      ...(keep(product.sku) ? { sku: product.sku } : {}),
-      ...(variants.length ? { variants } : {}),
+    const owns = opts.owns ?? (() => true);
+    const current = opts.current ?? null;
+    const live = new Set(
+      (current?.variants ?? []).map((v) => v.sku).filter((sku): sku is string => !!sku),
+    );
+    const keep = (sku: string | null | undefined, owner: string): sku is string => {
+      if (!sku || opts.skus === 'none') return false;
+      if (opts.skus === 'current') return live.has(sku);
+      return owns(sku, owner);
     };
+    const stock = CloveService.stockOf(product.stock);
+
+    const currentVariantByName = new Map<string, string>();
+    for (const v of current?.variants ?? []) {
+      if (v.name) currentVariantByName.set(normalise(v.name), v.id);
+    }
+    const variants: CloveVariantInput[] = (product.variations ?? []).map((v, i) => {
+      const id = currentVariantByName.get(normalise(v.name));
+      return {
+        ...(id ? { id } : {}),
+        name: v.name,
+        // Cloove takes naira decimals, not kobo.
+        price: Number(v.sellingPrice),
+        ...(keep(v.sku, variantKey(product, v, i)) ? { sku: v.sku } : {}),
+        // A size with no stock of its own sells from the product's stock.
+        stock_quantity: Number(v.stock) > 0 ? CloveService.stockOf(v.stock) : stock,
+      };
+    });
+
+    const input: CloveProductInput = {
+      name: product.name,
+      price: CloveService.basePriceOf(product),
+      is_active: true,
+      ...(product.description ? { description: product.description } : {}),
+      ...(product.imageUrl ? { image_urls: [product.imageUrl] } : {}),
+    };
+
+    if (variants.length > 0) {
+      input.variants = variants;
+      return input;
+    }
+
+    if (keep(product.sku, product.id)) input.sku = product.sku;
+    if (!current) {
+      input.quantity = stock;
+    } else if ((current.stores ?? []).length > 0) {
+      // PATCH ignores `quantity`; stock on an existing product moves per store.
+      input.store_inventory = (current.stores ?? []).map((s) => ({
+        store_id: s.id,
+        stock_quantity: stock,
+      }));
+    } else if (current.variants?.[0]) {
+      input.variants = [
+        {
+          id: current.variants[0].id,
+          name: current.variants[0].name ?? 'Standard',
+          price: input.price,
+          ...(input.sku ? { sku: input.sku } : {}),
+          stock_quantity: stock,
+        },
+      ];
+    }
+    return input;
   }
 
   private async rememberMapping(
