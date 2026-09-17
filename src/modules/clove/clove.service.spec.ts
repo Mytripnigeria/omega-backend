@@ -21,7 +21,12 @@ describe('CloveService.syncMenu', () => {
 
   const build = (
     products: ReturnType<typeof productFixture>[],
-    opts: { remote?: Array<Record<string, any>>; mapped?: unknown[] } = {},
+    opts: {
+      remote?: Array<Record<string, any>>;
+      mapped?: unknown[];
+      categories?: Array<{ id: string; name: string }>;
+      remoteCategories?: Array<{ id: string; name: string }>;
+    } = {},
   ) => {
     const integrationRepo = mockRepo([integration as never]);
     const menuMapRepo = mockRepo((opts.mapped ?? []) as never[]);
@@ -31,6 +36,8 @@ describe('CloveService.syncMenu', () => {
       listAllProducts: jest.fn(async () => opts.remote ?? []),
       deleteProduct: jest.fn(async () => undefined),
       getProduct: jest.fn(async () => null),
+      listCategories: jest.fn(async () => opts.remoteCategories ?? []),
+      createCategory: jest.fn(async (_c: unknown, name: string) => ({ id: `cat-${name}`, name })),
       createProduct: jest.fn(async (_c: unknown, input: Record<string, any>) => ({
         id: `clove-new-${input.name}`,
         name: input.name,
@@ -46,6 +53,7 @@ describe('CloveService.syncMenu', () => {
       productRepo as never,
       storeRepo as never,
       client as never,
+      mockRepo((opts.categories ?? []) as never[]) as never,
     );
     jest.spyOn(service, 'findWithSecret').mockResolvedValue(integration as never);
     return { service, client, menuMapRepo };
@@ -333,6 +341,69 @@ describe('CloveService.syncMenu', () => {
 
       expect(res.skippedNoPrice).toEqual([]);
       expect(client.createProduct.mock.calls[0][1]).toMatchObject({ price: 3000 });
+    });
+  });
+
+  /**
+   * Client, after the mirror went live: "noticed some categories are showing
+   * general instead of the correct category". Cloove files anything published
+   * without `category_id` under General.
+   */
+  describe('categories', () => {
+    const drinks = { id: 'cat-omega-drinks', name: 'Drinks' };
+
+    it('files the product under the Cloove category of the same name', async () => {
+      const { service, client } = build(
+        [productFixture({ id: 'p1', name: 'Coke', sellingPrice: 700, categoryId: drinks.id })],
+        { categories: [drinks], remoteCategories: [{ id: 'clove-cat-drinks', name: 'drinks' }] },
+      );
+
+      await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+      expect(client.createCategory).not.toHaveBeenCalled();
+      expect(client.createProduct.mock.calls[0][1]).toMatchObject({ category_id: 'clove-cat-drinks' });
+    });
+
+    it('creates a missing category once and files every product under it', async () => {
+      const { service, client } = build(
+        [
+          productFixture({ id: 'p1', name: 'Coke', sellingPrice: 700, categoryId: drinks.id }),
+          productFixture({ id: 'p2', name: 'Fanta', sellingPrice: 700, categoryId: drinks.id }),
+        ],
+        { categories: [drinks], remoteCategories: [] },
+      );
+
+      const res = await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+      expect(client.createCategory).toHaveBeenCalledTimes(1);
+      expect(client.createCategory).toHaveBeenCalledWith(expect.anything(), 'Drinks');
+      for (const call of client.createProduct.mock.calls) {
+        expect(call[1]).toMatchObject({ category_id: 'cat-Drinks' });
+      }
+      expect(res.categoriesCreated).toBe(1);
+    });
+
+    it('sends no category for a product that has none here', async () => {
+      const { service, client } = build([
+        productFixture({ id: 'p1', name: 'Coke', sellingPrice: 700, categoryId: null }),
+      ]);
+
+      await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+      expect(client.createProduct.mock.calls[0][1]).not.toHaveProperty('category_id');
+    });
+
+    it('still publishes when the categories cannot be read, just without them', async () => {
+      const { service, client } = build(
+        [productFixture({ id: 'p1', name: 'Coke', sellingPrice: 700, categoryId: drinks.id })],
+        { categories: [drinks] },
+      );
+      client.listCategories.mockRejectedValue(new Error('Cloove timed out') as never);
+
+      const res = await service.syncMenu('biz-1', 'store-1', 'int-1');
+
+      expect(res.created).toBe(1);
+      expect(client.createProduct.mock.calls[0][1]).not.toHaveProperty('category_id');
     });
   });
 });

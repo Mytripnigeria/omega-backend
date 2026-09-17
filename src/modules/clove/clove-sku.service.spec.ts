@@ -16,7 +16,7 @@ describe('CloveService SKU collisions', () => {
 
   const build = (
     products: ReturnType<typeof productFixture>[],
-    opts: { failOnSku?: boolean; remote?: Array<Record<string, any>>; mapped?: Array<Record<string, any>>; deadSkus?: string[] } = {},
+    opts: { failOnSku?: boolean; remote?: Array<Record<string, any>>; mapped?: Array<Record<string, any>>; deadSkus?: string[]; remoteCategories?: never[] } = {},
   ) => {
     const dead = (input: Record<string, any>) =>
       [input.sku, ...(input.variants ?? []).map((v: { sku?: string }) => v.sku)].some((s) => s && opts.deadSkus?.includes(s));
@@ -24,6 +24,8 @@ describe('CloveService SKU collisions', () => {
       listAllProducts: jest.fn(async () => opts.remote ?? []),
       deleteProduct: jest.fn(async () => undefined),
       getProduct: jest.fn(async () => null),
+      listCategories: jest.fn(async () => opts.remoteCategories ?? []),
+      createCategory: jest.fn(async (_c: unknown, name: string) => ({ id: `cat-${name}`, name })),
       createProduct: jest.fn(async (_c: unknown, input: Record<string, any>) => {
         const carriesSku = !!input.sku || (input.variants ?? []).some((v: { sku?: string }) => v.sku);
         if (opts.failOnSku && carriesSku) throw new CloveApiError('An unexpected error occurred. Please try again.', 500);
@@ -40,6 +42,7 @@ describe('CloveService SKU collisions', () => {
       mockRepo(products) as never,
       mockRepo([]) as never,
       client as never,
+      mockRepo([]) as never,
     );
     jest.spyOn(service, 'findWithSecret').mockResolvedValue(integration as never);
     return { service, client };

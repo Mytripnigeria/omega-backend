@@ -5,6 +5,7 @@ import { CloveMenuItemEntity } from './entities/clove-menu-item.entity';
 import { ProductEntity } from '../products/entities/product.entity';
 import { StoreEntity } from '../store/entities/store.entity';
 import { OrderEntity } from '../orders/entities/order.entity';
+import { CategoryEntity } from '../categories/entities/category.entity';
 import { CloveClient } from './clove.client';
 import { CloveService } from './clove.service';
 import { CloveIngestService } from './clove-ingest.service';
@@ -21,6 +22,7 @@ import { CustomersModule } from '../customers/customers.module';
       ProductEntity,
       StoreEntity,
       OrderEntity,
+      CategoryEntity,
     ]),
     // Ingestion creates orders through OrdersService.
     forwardRef(() => OrdersModule),

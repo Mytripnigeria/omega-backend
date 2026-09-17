@@ -79,6 +79,12 @@ export interface CloveProduct {
   }>;
 }
 
+export interface CloveCategory {
+  id: string;
+  name: string;
+  slug?: string | null;
+}
+
 export interface CloveOrderItem {
   id: string;
   productId: string | null;
@@ -288,6 +294,26 @@ export class CloveClient {
       'PATCH',
       `/v1/products/${cloveProductId}`,
       input,
+    );
+    return res.data;
+  }
+
+  /** Business-wide categories; a product without one shows as "General". */
+  async listCategories(creds: CloveCredentials): Promise<CloveCategory[]> {
+    const res = await this.request<{ data: CloveCategory[] }>(
+      creds,
+      'GET',
+      '/v1/products/categories',
+    );
+    return res.data ?? [];
+  }
+
+  async createCategory(creds: CloveCredentials, name: string): Promise<CloveCategory> {
+    const res = await this.request<{ data: CloveCategory }>(
+      creds,
+      'POST',
+      '/v1/products/categories',
+      { name },
     );
     return res.data;
   }

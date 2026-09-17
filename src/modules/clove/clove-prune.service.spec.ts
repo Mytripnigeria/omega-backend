@@ -26,6 +26,7 @@ describe('CloveService.syncMenu — mirroring the menu', () => {
       mapped?: Array<Record<string, any>>;
       integrations?: Array<Record<string, any>>;
       failDelete?: string[];
+      remoteCategories?: never[];
     } = {},
   ) => {
     const integrationRepo = mockRepo([integration, ...(opts.integrations ?? [])] as never[]);
@@ -38,6 +39,8 @@ describe('CloveService.syncMenu — mirroring the menu', () => {
         if (opts.failDelete?.includes(id)) throw new Error('Cloove: product_in_use');
       }),
       getProduct: jest.fn(async () => null),
+      listCategories: jest.fn(async () => opts.remoteCategories ?? []),
+      createCategory: jest.fn(async (_c: unknown, name: string) => ({ id: `cat-${name}`, name })),
       createProduct: jest.fn(async (_c: unknown, input: Record<string, any>) => ({
         id: `clove-new-${input.name}`,
         name: input.name,
@@ -53,6 +56,7 @@ describe('CloveService.syncMenu — mirroring the menu', () => {
       mockRepo(products) as never,
       mockRepo([]) as never,
       client as never,
+      mockRepo([]) as never,
     );
     jest.spyOn(service, 'findWithSecret').mockResolvedValue(integration as never);
     return { service, client, menuMapRepo };

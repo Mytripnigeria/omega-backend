@@ -11,6 +11,7 @@ import { CloveMenuItemEntity } from './entities/clove-menu-item.entity';
 import { UpsertCloveIntegrationDto } from './dto/clove-integration.dto';
 import {
   CloveApiError,
+  CloveCategory,
   CloveClient,
   CloveCredentials,
   CloveProduct,
@@ -19,6 +20,7 @@ import {
 } from './clove.client';
 import { ProductEntity } from '../products/entities/product.entity';
 import { StoreEntity } from '../store/entities/store.entity';
+import { CategoryEntity } from '../categories/entities/category.entity';
 
 /** The only join Cloove offers is the name, so compare them loosely. */
 const normalise = (name: string): string =>
@@ -78,6 +80,8 @@ export class CloveService {
     @InjectRepository(StoreEntity)
     private readonly storeRepo: Repository<StoreEntity>,
     private readonly client: CloveClient,
+    @InjectRepository(CategoryEntity)
+    private readonly categoryRepo: Repository<CategoryEntity>,
   ) {}
 
   // ───────────────────────── configuration ─────────────────────────
@@ -306,6 +310,8 @@ export class CloveService {
     const skuConflicts: string[] = [];
     const failures: string[] = [];
 
+    const categories = await this.resolveCategories(creds, priced);
+
     /**
      * The catalogue as Cloove holds it right now. Adoption, pruning and
      * carrying variant ids across an update all lean on it. A failed read must
@@ -457,7 +463,8 @@ export class CloveService {
           await this.rememberMapping(integration, product.id, res.id, res.name);
         }
       };
-      const input = this.buildProductInput(product, { owns, current });
+      const categoryId = categories.byProduct.get(product.id);
+      const input = this.buildProductInput(product, { owns, current, categoryId });
       try {
         await publish(input);
         return;
@@ -481,8 +488,8 @@ export class CloveService {
         }
         const seen = new Set<string>([sent.join('|')]);
         const fallbacks = [
-          this.buildProductInput(product, { skus: 'current', current }),
-          this.buildProductInput(product, { skus: 'none', current }),
+          this.buildProductInput(product, { skus: 'current', current, categoryId }),
+          this.buildProductInput(product, { skus: 'none', current, categoryId }),
         ].filter((alt) => {
           const key = skusIn(alt).join('|');
           if (seen.has(key)) return false;
@@ -533,6 +540,8 @@ export class CloveService {
        * here or ask Cloove to purge it.
        */
       skuConflicts,
+      /** Categories this publish had to add to Cloove to file products under. */
+      categoriesCreated: categories.created,
       failures,
       mapped: await this.menuMapRepo.count({
         where: { integrationId: integration.id },
@@ -584,7 +593,11 @@ export class CloveService {
     const current = known
       ? await this.client.getProduct(creds, known.cloveProductId)
       : null;
-    const input = this.buildProductInput(product, { current });
+    const categories = await this.resolveCategories(creds, [product]);
+    const input = this.buildProductInput(product, {
+      current,
+      categoryId: categories.byProduct.get(product.id),
+    });
     const res = current
       ? await this.client.updateProduct(creds, current.id, input)
       : await this.client.createProduct(creds, input);
@@ -602,6 +615,63 @@ export class CloveService {
         sku: v.sku,
       })),
     };
+  }
+
+  /**
+   * Cloove category for each product, by name.
+   *
+   * A product published without `category_id` sits under "General" on Cloove
+   * — the client's "some categories are showing general instead of the
+   * correct category". Cloove's categories are business-wide and carry no
+   * external reference, and it happily creates duplicates, so the join is the
+   * normalised name and anything missing is created exactly once. A failed
+   * read must not stop the publish; the products simply keep their category.
+   */
+  private async resolveCategories(
+    creds: CloveCredentials,
+    products: ProductEntity[],
+  ): Promise<{ byProduct: Map<string, string>; created: number }> {
+    const byProduct = new Map<string, string>();
+    const categoryIds = [...new Set(products.map((p) => p.categoryId).filter(Boolean))];
+    if (categoryIds.length === 0) return { byProduct, created: 0 };
+
+    const ours = await this.categoryRepo.find({ where: { id: In(categoryIds) } });
+    const nameById = new Map(ours.map((c) => [c.id, c.name]));
+
+    let remote: CloveCategory[];
+    try {
+      remote = await this.client.listCategories(creds);
+    } catch (err) {
+      this.logger.warn(`Cloove categories read failed: ${(err as Error).message}`);
+      return { byProduct, created: 0 };
+    }
+    const cloveIdByName = new Map<string, string>();
+    for (const c of remote) {
+      if (c?.name && c?.id && !cloveIdByName.has(normalise(c.name))) {
+        cloveIdByName.set(normalise(c.name), c.id);
+      }
+    }
+
+    let created = 0;
+    for (const product of products) {
+      const name = product.categoryId ? nameById.get(product.categoryId) : undefined;
+      if (!name?.trim()) continue;
+      const key = normalise(name);
+      if (!cloveIdByName.has(key)) {
+        try {
+          const made = await this.client.createCategory(creds, name.trim());
+          cloveIdByName.set(key, made.id);
+          created += 1;
+        } catch (err) {
+          this.logger.warn(
+            `Cloove would not create category "${name}": ${(err as Error).message}`,
+          );
+          continue;
+        }
+      }
+      byProduct.set(product.id, cloveIdByName.get(key)!);
+    }
+    return { byProduct, created };
   }
 
   /**
@@ -649,6 +719,8 @@ export class CloveService {
       owns?: (sku: string, owner: string) => boolean;
       /** The product as Cloove holds it now, when this is an update. */
       current?: CloveProduct | null;
+      /** Cloove category to file it under; none leaves it where it is. */
+      categoryId?: string;
     } = {},
   ): CloveProductInput {
     const owns = opts.owns ?? (() => true);
@@ -686,6 +758,7 @@ export class CloveService {
       is_active: true,
       ...(product.description ? { description: product.description } : {}),
       ...(product.imageUrl ? { image_urls: [product.imageUrl] } : {}),
+      ...(opts.categoryId ? { category_id: opts.categoryId } : {}),
     };
 
     if (variants.length > 0) {

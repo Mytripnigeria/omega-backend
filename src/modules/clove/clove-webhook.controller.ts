@@ -1,12 +1,17 @@
 import { Body, Controller, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { CloveIngestService } from './clove-ingest.service';
+import { CloveEventBody, CloveIngestService } from './clove-ingest.service';
 
 /**
- * Cloove's webhook receiver, at the path the client registered with them:
- * `https://app.omega.com.ng/webhook/cloveai`. Outside `/api` guards because
- * Cloove posts unauthenticated.
+ * Cloove's webhook receiver. The merchant registers
+ * `<PUBLIC_URL>/webhook/cloveai/<channel id>` in Cloove's developer portal
+ * (events `order.created` and `order.updated`); the hub shows that URL on the
+ * channel. Outside `/api` guards because Cloove posts unauthenticated.
+ *
+ * Cloove signs deliveries (`Cloove-Signature: t=…,v1=…`, HMAC-SHA256 with a
+ * `whsec_` secret). The signature is deliberately NOT what protects this
+ * endpoint — see below — so the merchant has nothing to paste but the URL.
  *
  * The posted body is treated as a *hint*, never as truth: it only tells us
  * which order to look at, and the order is then read back from Cloove with our
@@ -16,14 +21,7 @@ import { CloveIngestService } from './clove-ingest.service';
  * Typed as a plain interface, not a class DTO: the global ValidationPipe runs
  * `forbidNonWhitelisted` and would 400 on every Cloove field we don't declare.
  */
-export interface CloveWebhookBody {
-  event?: string;
-  type?: string;
-  data?: { id?: string; orderId?: string; order?: { id?: string } };
-  orderId?: string;
-  id?: string;
-  [key: string]: unknown;
-}
+export type CloveWebhookBody = CloveEventBody;
 
 @ApiExcludeController()
 @Controller('webhook/cloveai')

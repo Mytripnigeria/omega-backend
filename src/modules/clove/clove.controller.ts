@@ -9,8 +9,11 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import type { Request } from 'express';
 import {
   ApiBearerAuth,
   ApiOkResponse,
@@ -36,37 +39,52 @@ export class CloveController {
   constructor(
     private readonly service: CloveService,
     private readonly ingest: CloveIngestService,
+    private readonly config: ConfigService,
   ) {}
 
-  @ApiOperation({ summary: "Every Cloove channel on a store" })
+  @ApiOperation({
+    summary: "Every Cloove channel on a store",
+    description:
+      'Each channel carries the webhook URL to register in Cloove\'s developer ' +
+      'portal (events order.created and order.updated).',
+  })
   @ApiParam({ name: 'storeId', format: 'uuid' })
   @Get(':storeId/channels')
-  channels(@BusinessId() businessId: string, @Param('storeId') storeId: string) {
-    return this.service.listChannels(businessId, storeId);
+  async channels(
+    @Req() req: Request,
+    @BusinessId() businessId: string,
+    @Param('storeId') storeId: string,
+  ) {
+    const rows = await this.service.listChannels(businessId, storeId);
+    return rows.map((c) => ({ ...c, webhookUrl: this.webhookUrl(req, c.id) }));
   }
 
   @ApiOperation({ summary: 'Connect a Cloove channel to a store' })
   @Post(':storeId/channels')
-  addChannel(
+  async addChannel(
+    @Req() req: Request,
     @BusinessId() businessId: string,
     @Param('storeId') storeId: string,
     @Body() dto: UpsertCloveIntegrationDto,
   ) {
-    return this.service.upsertConfig(businessId, storeId, {
+    const saved = await this.service.upsertConfig(businessId, storeId, {
       ...dto,
       createNew: true,
     });
+    return { ...saved, webhookUrl: this.webhookUrl(req, saved.id) };
   }
 
   @ApiOperation({ summary: 'Update one Cloove channel' })
   @Put(':storeId/channels/:channelId')
-  updateChannel(
+  async updateChannel(
+    @Req() req: Request,
     @BusinessId() businessId: string,
     @Param('storeId') storeId: string,
     @Param('channelId') channelId: string,
     @Body() dto: UpsertCloveIntegrationDto,
   ) {
-    return this.service.upsertConfig(businessId, storeId, dto, channelId);
+    const saved = await this.service.upsertConfig(businessId, storeId, dto, channelId);
+    return { ...saved, webhookUrl: this.webhookUrl(req, saved.id) };
   }
 
   @ApiOperation({ summary: 'Check the API key works' })
@@ -170,5 +188,27 @@ export class CloveController {
     @Param('channelId') channelId: string,
   ) {
     return this.service.removeConfig(businessId, storeId, channelId);
+  }
+
+  /** The URL the merchant registers in Cloove's developer portal. */
+  private webhookUrl(req: Request, channelId: string): string {
+    return `${this.publicBase(req)}/webhook/cloveai/${channelId}`;
+  }
+
+  /**
+   * Same rule as the Chowdeck controller: PUBLIC_URL when set, else whatever
+   * host the proxy says we were reached on.
+   */
+  private publicBase(req: Request): string {
+    const configured =
+      this.config.get<string>('PUBLIC_URL') ?? this.config.get<string>('APP_PUBLIC_URL');
+    if (configured) return configured.replace(/\/+$/, '');
+    const proto = String(req.headers['x-forwarded-proto'] ?? req.protocol ?? 'https')
+      .split(',')[0]
+      .trim();
+    const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '')
+      .split(',')[0]
+      .trim();
+    return `${proto}://${host}`;
   }
 }
