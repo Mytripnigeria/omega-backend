@@ -155,6 +155,23 @@ export class OrdersController {
   }
 
   @ApiOperation({
+    summary: 'Send an order to the kitchen',
+    description:
+      'Hands an accepted (PENDING) order to the kitchen. The order stays ' +
+      'PENDING — it is already on the kitchen board, waiting for a cook to ' +
+      'start preparing — and the hand-over is recorded on `sentToKitchenAt`. ' +
+      "For a Cloove order this moves Cloove's kitchen ticket to `queued` " +
+      'first, and the order is left untouched if Cloove refuses. Calling it ' +
+      'twice is a no-op.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiOkResponse({ type: OrderResponseDto })
+  @Post(':id/send-to-kitchen')
+  sendToKitchen(@Req() req: AuthedRequest, @Param('id') id: string) {
+    return this.service.sendToKitchen(actorFrom(req), id);
+  }
+
+  @ApiOperation({
     summary: 'Cancel an order',
     description: 'Cancels a non-terminal order. Captures an optional reason in the audit log.',
   })

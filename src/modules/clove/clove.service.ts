@@ -1,9 +1,12 @@
 import {
+  BadGatewayException,
   BadRequestException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { CloveIntegrationEntity } from './entities/clove-integration.entity';
@@ -14,6 +17,7 @@ import {
   CloveCategory,
   CloveClient,
   CloveCredentials,
+  CloveKitchenStatus,
   CloveProduct,
   CloveProductInput,
   CloveVariantInput,
@@ -21,6 +25,15 @@ import {
 import { ProductEntity } from '../products/entities/product.entity';
 import { StoreEntity } from '../store/entities/store.entity';
 import { CategoryEntity } from '../categories/entities/category.entity';
+
+/**
+ * The pseudo-status OrdersService pushes when a cashier presses "Kitchen".
+ *
+ * Sending an order to the kitchen moves nothing in our own lifecycle — the
+ * order is already PENDING and already on the kitchen board — but it is a
+ * real transition on Cloove, where the ticket becomes `queued`.
+ */
+export const CLOVE_SEND_TO_KITCHEN = 'send_to_kitchen';
 
 /** The only join Cloove offers is the name, so compare them loosely. */
 const normalise = (name: string): string =>
@@ -54,6 +67,14 @@ const mapPool = async <T>(
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 };
 
+/**
+ * The columns a row needs to actually talk to Cloove. `apiKey` is
+ * `select: false` on the entity, so anything that calls Cloove has to name it.
+ *
+ * The two sync marks belong here as well: the scheduled pull reads its
+ * channels through this list, and without them every pass fell back to the
+ * 24-hour floor instead of the incremental window the pull is written around.
+ */
 const SECRET_COLUMNS = {
   id: true,
   businessId: true,
@@ -64,6 +85,8 @@ const SECRET_COLUMNS = {
   baseUrl: true,
   isEnabled: true,
   autoAccept: true,
+  lastOrderSyncAt: true,
+  oldestUnsettledOrderAt: true,
 } as const;
 
 @Injectable()
@@ -827,39 +850,75 @@ export class CloveService {
   }
 
   /**
-   * Relays a local status change back to Cloove.
+   * What a local workstation action means on Cloove.
    *
-   * Cloove's order status vocabulary is only **pending / completed /
-   * cancelled** (verified against the live API — everything else 422s as
-   * "The selected status is invalid"). The client's spec asks for a push on
-   * accept / preparing / ready / complete, but only three of those have any
-   * Cloove equivalent, so:
-   *   accepted (PENDING)          -> pending
-   *   COMPLETED / SERVED          -> completed
-   *   CANCELLED                   -> cancelled
-   *   PREPARING / READY           -> nothing to send
+   * Cloove keeps two separate vocabularies, and the merchant's flow uses both:
+   *
+   *   - the ORDER status (`PATCH /v1/orders/:id`), which accepts only
+   *     `scheduled` / `pending` / `completed` / `cancelled`;
+   *   - the KITCHEN TICKET stage (`POST /v1/orders/:id/kitchen-status`),
+   *     `queued` / `preparing` / `ready` / `served` — the same stages Cloove's
+   *     own Kitchen board moves through, each one messaging the customer on
+   *     WhatsApp. That endpoint is what lets our POS drive Cloove's board,
+   *     and it is why "preparing" and "ready" now have somewhere to go.
+   *
+   * The mapping the merchant specified:
+   *   Accept                -> nothing (the money was taken on Cloove already)
+   *   Reject / Cancel       -> order  cancelled
+   *   Send to kitchen       -> ticket queued
+   *   Quick Bill            -> ticket ready
+   *   Kitchen "Prepare"     -> ticket preparing
+   *   Kitchen "Ready"       -> ticket ready
+   *   Kitchen "Complete"    -> ticket served
+   *   Kitchen "Call back"   -> ticket preparing  (stages may move backwards)
    */
-  private static cloveStatusFor(toStatus: string): string | null {
+  static cloveTargetFor(
+    toStatus: string,
+  ):
+    | { kind: 'order'; status: 'pending' | 'completed' | 'cancelled' }
+    | { kind: 'kitchen'; status: CloveKitchenStatus }
+    | null {
     switch (toStatus) {
-      case 'pending':
-        return 'pending';
+      case CLOVE_SEND_TO_KITCHEN:
+        return { kind: 'kitchen', status: 'queued' };
+      case 'preparing':
+        return { kind: 'kitchen', status: 'preparing' };
+      case 'ready':
+        return { kind: 'kitchen', status: 'ready' };
       case 'completed':
       case 'served':
-        return 'completed';
+        return { kind: 'kitchen', status: 'served' };
       case 'cancelled':
-        return 'cancelled';
+        return { kind: 'order', status: 'cancelled' };
+      // Accepting an order tells Cloove nothing it does not already know:
+      // the customer paid there, and the ticket has not moved yet.
+      case 'pending':
       default:
         return null;
     }
   }
 
+  /**
+   * Relays a local status change to Cloove, and **throws if Cloove does not
+   * take it**.
+   *
+   * That is the merchant's rule: every update goes to Cloove first, and only a
+   * successful Cloove response is followed by the local change, "to make sure
+   * omega always shares same order conditions with what's on clove". The
+   * caller (OrdersService) therefore runs this before it touches the order.
+   *
+   * The one thing that is not an error is having no Cloove channel on the
+   * store at all — a merchant who disconnected Cloove still has to be able to
+   * work the orders already on their counter.
+   */
   async pushStatus(params: {
     storeId: string;
     externalReference: string;
     toStatus: string;
+    reason?: string | null;
   }): Promise<void> {
-    const cloveStatus = CloveService.cloveStatusFor(params.toStatus);
-    if (!cloveStatus) return;
+    const target = CloveService.cloveTargetFor(params.toStatus);
+    if (!target) return;
 
     // externalReference is stamped as `CLOVE-<cloveOrderId>`.
     const cloveOrderId = params.externalReference.replace(/^CLOVE-/, '');
@@ -868,32 +927,149 @@ export class CloveService {
     const rows = await this.integrationRepo.find({
       where: { storeId: params.storeId, isEnabled: true },
       select: { id: true },
+      // Oldest first: the merchant's working channel is the one they set up
+      // first, and a store often also carries a test bot (and, in one case, a
+      // channel saved with a webhook secret in place of the API key).
+      order: { createdAt: 'ASC' },
     });
+    if (rows.length === 0) {
+      this.logger.warn(
+        `No enabled Cloove channel on store ${params.storeId} — ` +
+          `${params.toStatus} for order ${cloveOrderId} was not sent`,
+      );
+      return;
+    }
+
+    // A store may hold several Cloove channels (the merchant runs a live one
+    // and a test bot on the same workspace). Only one of them knows this
+    // order, so a rejection from the first is not the answer — try each, and
+    // report the last failure only when none of them took it.
+    let lastError: unknown;
+    let bestError: unknown;
+    const errors: unknown[] = [];
     for (const row of rows) {
       const integration = await this.findWithSecret({ id: row.id });
       if (!integration) continue;
       try {
-        await this.client.updateOrderStatus(
-          this.credentialsOf(integration),
-          cloveOrderId,
-          cloveStatus,
-        );
+        if (target.kind === 'kitchen') {
+          await this.client.updateKitchenStatus(
+            this.credentialsOf(integration),
+            cloveOrderId,
+            target.status,
+            randomUUID(),
+          );
+        } else {
+          await this.client.updateOrderStatus(
+            this.credentialsOf(integration),
+            cloveOrderId,
+            target.status,
+            target.status === 'cancelled' ? (params.reason ?? undefined) : undefined,
+          );
+        }
         this.logger.log(
-          `Cloove status ${cloveStatus} sent for order ${cloveOrderId}`,
+          `Cloove ${target.kind} status ${target.status} sent for order ${cloveOrderId}`,
         );
         return;
       } catch (err) {
+        lastError = err;
+        errors.push(err);
+        if (bestError === undefined || CloveService.isAuthFailure(bestError)) {
+          // A channel saved with the wrong key answers 401 to everything; its
+          // complaint must not be what staff are shown when a real channel
+          // failed for a real reason.
+          bestError = err;
+        }
         this.logger.warn(
-          `Cloove status push failed for ${cloveOrderId}: ${(err as Error).message}`,
+          `Cloove ${target.kind} status push failed for ${cloveOrderId}: ${(err as Error).message}`,
         );
       }
     }
+
+    // An order none of the connected workspaces has ever heard of is not a
+    // sync failure — there is nothing there to keep in step. It happens with
+    // the hub's rehearsal order (injected locally, never created on Cloove)
+    // and with an order whose channel the merchant has since replaced.
+    // Trapping those on the counter forever would help nobody.
+    if (errors.length > 0 && errors.every((e) => CloveService.isUnknownOrder(e))) {
+      this.logger.warn(
+        `Cloove does not know order ${cloveOrderId} — ${params.toStatus} applied locally only`,
+      );
+      return;
+    }
+    throw CloveService.pushFailure(bestError ?? lastError, target.kind);
   }
 
-  async markOrderSync(integrationId: string): Promise<void> {
+  /** A key problem rather than an order problem. */
+  private static isAuthFailure(err: unknown): boolean {
+    return err instanceof CloveApiError && [401, 403].includes(err.upstreamStatus);
+  }
+
+  /**
+   * A 404 that means "no such order here", as opposed to Cloove's other 404,
+   * "This order has no associated kitchen ticket" — that one is about an
+   * order Cloove does know, and the merchant has to fix it on Cloove's side,
+   * so it stays a hard failure.
+   */
+  private static isUnknownOrder(err: unknown): boolean {
+    if (!(err instanceof CloveApiError) || err.upstreamStatus !== 404) return false;
+    return !/kitchen ticket/i.test(err.message);
+  }
+
+  /**
+   * Turns the upstream failure into something the cashier can act on.
+   *
+   * "This order has no associated kitchen ticket" is the one worth naming: it
+   * means the order was created on Cloove without `send_to_kitchen`, and no
+   * endpoint adds a ticket afterwards — so the merchant has to have Cloove
+   * route the order to the kitchen at creation.
+   */
+  private static pushFailure(err: unknown, kind: 'order' | 'kitchen'): Error {
+    const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
+    if (kind === 'kitchen' && /kitchen ticket/i.test(message)) {
+      return new BadRequestException(
+        `${message} — this Cloove order was never routed to Cloove's kitchen, ` +
+          'so its prep stage cannot be updated there. Ask Cloove to create ' +
+          'these orders with send_to_kitchen enabled.',
+      );
+    }
+    // Cloove refuses to cancel an order it collected by automated bank
+    // transfer, because that needs a payment reversal on their side. Rather
+    // than strand the order on the counter — or cancel here and let the two
+    // disagree — point staff at the one place that can do it. Cancelling it
+    // there brings the cancellation back to us through the webhook or pull.
+    if (
+      kind === 'order' &&
+      err instanceof CloveApiError &&
+      [400, 409, 422].includes(err.upstreamStatus)
+    ) {
+      return new BadRequestException(
+        `${message} — cancel or refund this order in Cloove instead; it will ` +
+          'be cancelled here automatically once Cloove reports it.',
+      );
+    }
+    if (err instanceof HttpException) return err;
+    return new BadGatewayException(
+      `Cloove did not accept the update, so the order was left unchanged: ${message}`,
+    );
+  }
+
+  /**
+   * Records that a pull just ran, and how far back the next one must still
+   * look: `oldestUnsettled` is the earliest order this pass saw but did not
+   * register — awaiting payment, or one whose ingest failed. The window
+   * otherwise advances to now, which would put an order paid an hour after it
+   * was placed out of sight for good.
+   */
+  async markOrderSync(
+    integrationId: string,
+    oldestUnsettled?: Date | null,
+  ): Promise<void> {
     await this.integrationRepo.update(
       { id: integrationId },
-      { lastOrderSyncAt: new Date() },
+      {
+        lastOrderSyncAt: new Date(),
+        oldestUnsettledOrderAt: oldestUnsettled ?? null,
+      },
     );
   }
 }

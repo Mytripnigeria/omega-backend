@@ -173,7 +173,9 @@ describe('CloveIngestService — orders coming in', () => {
       listEnabledWithSecrets: jest.fn(async () => [{ ...integration, ...opts.integration }]),
       credentialsOf: jest.fn(() => ({ apiKey: 'sk', baseUrl: 'https://api.clooveai.com' })),
       productIdForCloveId: jest.fn(async () => 'prod-water'),
-      markOrderSync: jest.fn(async () => undefined),
+      markOrderSync: jest.fn(
+        async (_integrationId: string, _oldestUnpaid?: Date | null) => undefined,
+      ),
     };
     const client = {
       getOrder: jest.fn(async (_c: unknown, id: string) =>
@@ -301,7 +303,7 @@ describe('CloveIngestService — orders coming in', () => {
 
       expect(clove.listEnabledWithSecrets).toHaveBeenCalledTimes(1);
       expect(orders.create).toHaveBeenCalledTimes(1);
-      expect(clove.markOrderSync).toHaveBeenCalledWith('int-1');
+      expect(clove.markOrderSync).toHaveBeenCalledWith('int-1', null);
     });
   });
 
@@ -318,6 +320,8 @@ describe('CloveIngestService — orders coming in', () => {
         expect.objectContaining({ actorName: 'Cloove', businessId: 'biz-1' }),
         'order-1',
         { reason: 'Cancelled on Cloove (cancelled)' },
+        // Cloove cancelled it; cancelling it back on Cloove could only fail.
+        { skipExternalPush: true },
       );
       expect(res).toMatchObject({ handled: true, cancelled: true, orderNumber: 55 });
     });
@@ -349,6 +353,130 @@ describe('CloveIngestService — orders coming in', () => {
       expect(orders.cancel).toHaveBeenCalledTimes(1);
       expect(res.cancelled).toBe(1);
       expect(res.results[0]).toMatchObject({ outcome: 'cancelled', orderNumber: 55 });
+    });
+  });
+
+  /**
+   * The merchant's report: "the order gets to the workstation when payment has
+   * not been made". Cloove announces an order as soon as its assistant records
+   * it — paying comes after — so both doors now check `paymentStatus` first.
+   */
+  describe('payment gate', () => {
+    const unpaid = (over: Record<string, unknown> = {}) =>
+      cloveOrder({ status: 'pending', paymentStatus: 'pending', ...over });
+
+    it('does not register an unpaid order from the webhook', async () => {
+      const { service, orders } = build({ orders: [unpaid()] });
+
+      const res = await service.handleWebhook(
+        { type: 'order.created', data: { entityType: 'sale', entityId: 'ord-1' } },
+        'int-1',
+      );
+
+      expect(orders.create).not.toHaveBeenCalled();
+      expect(res).toMatchObject({ handled: true, skipped: true, unpaid: true });
+      expect((res as { reason: string }).reason).toMatch(/awaiting payment/i);
+    });
+
+    it('registers the same order once Cloove reports it paid', async () => {
+      const { service, orders, client } = build({ orders: [unpaid()] });
+      const event = { type: 'order.created', data: { entityType: 'sale', entityId: 'ord-1' } };
+
+      await service.handleWebhook(event, 'int-1');
+      // The customer pays; Cloove sends payment.received for the same order.
+      client.getOrder.mockResolvedValue(cloveOrder() as never);
+      const res = await service.handleWebhook(
+        { type: 'payment.received', data: { entityType: 'sale', entityId: 'ord-1' } },
+        'int-1',
+      );
+
+      expect(orders.create).toHaveBeenCalledTimes(1);
+      expect(res).toMatchObject({ handled: true, duplicate: false });
+    });
+
+    it('treats a part-paid order as unpaid', async () => {
+      const { service, orders } = build({ orders: [unpaid({ paymentStatus: 'partial', amountPaid: 200 })] });
+
+      await service.pullOrders(integration as never);
+
+      expect(orders.create).not.toHaveBeenCalled();
+    });
+
+    it('counts the unpaid ones separately in a pull', async () => {
+      const { service, orders } = build({
+        orders: [cloveOrder({ id: 'paid-1' }), unpaid({ id: 'unpaid-1' })],
+      });
+
+      const res = await service.pullOrders(integration as never);
+
+      expect(orders.create).toHaveBeenCalledTimes(1);
+      expect(res.ingested).toBe(1);
+      expect(res.unpaid).toBe(1);
+      expect(res.results.find((r) => r.cloveOrderId === 'unpaid-1')).toMatchObject({
+        outcome: 'unpaid',
+      });
+    });
+
+    it('keeps the pull window open back to the oldest unpaid order', async () => {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+      const { service, clove } = build({
+        orders: [
+          cloveOrder({ id: 'paid-1', createdAt: oneHourAgo }),
+          unpaid({ id: 'unpaid-1', createdAt: threeHoursAgo }),
+        ],
+      });
+
+      await service.pullOrders(integration as never);
+
+      // Without this the window would advance to now, and the payment landing
+      // an hour later would find the order already out of sight.
+      const [, watermark] = clove.markOrderSync.mock.calls[0];
+      expect(new Date(watermark as Date).toISOString()).toBe(threeHoursAgo);
+    });
+
+    it('clears the watermark once nothing is outstanding', async () => {
+      const { service, clove } = build({ orders: [cloveOrder({ id: 'paid-1' })] });
+
+      await service.pullOrders(integration as never);
+
+      expect(clove.markOrderSync.mock.calls[0][1]).toBeNull();
+    });
+
+    it('the window reaches back to an unpaid order, but never past the day floor', () => {
+      const now = Date.parse('2026-09-20T12:00:00Z');
+      const lastPull = new Date('2026-09-20T11:55:00Z');
+      const withUnpaid = {
+        ...integration,
+        lastOrderSyncAt: lastPull,
+        oldestUnsettledOrderAt: new Date('2026-09-20T08:00:00Z'),
+      };
+      expect(CloveIngestService.pullWindowStart(withUnpaid as never, now)).toBe(
+        Date.parse('2026-09-20T08:00:00Z'),
+      );
+      // An order left unpaid for days stops holding the window open.
+      const stale = { ...withUnpaid, oldestUnsettledOrderAt: new Date('2026-09-01T08:00:00Z') };
+      expect(CloveIngestService.pullWindowStart(stale as never, now)).toBe(
+        now - CloveIngestService.PULL_WINDOW_MS,
+      );
+    });
+
+    it('falls back to the totals when a payload carries no paymentStatus', () => {
+      const paid = { id: 'x', shortCode: null, status: 'completed', paymentStatus: null, totalAmount: 400, amountPaid: 400 };
+      expect(CloveIngestService.isPaid(paid as never)).toBe(true);
+      expect(CloveIngestService.isPaid({ ...paid, amountPaid: 100 } as never)).toBe(false);
+      // Nothing to judge on at all: assume unpaid rather than feed the kitchen.
+      expect(CloveIngestService.isPaid({ ...paid, amountPaid: undefined } as never)).toBe(false);
+    });
+
+    it('a test order still comes through — it is created paid', async () => {
+      const { service, orders } = build();
+      const mapped = { mappedItems: jest.fn(async () => [{ productId: 'prod-water', cloveProductId: 'clove-water', name: 'Water' }]) };
+      Object.assign((service as unknown as { clove: Record<string, unknown> }).clove, mapped);
+
+      await service.simulateIncomingOrder(integration as never);
+
+      expect(orders.create).toHaveBeenCalledTimes(1);
     });
   });
 

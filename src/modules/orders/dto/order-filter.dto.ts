@@ -27,10 +27,10 @@ export class OrderFilterDto extends PaginationQueryDto {
   @IsString()
   status?: string;
 
-  @ApiPropertyOptional({ enum: ['pos', 'website', 'phone'] })
+  @ApiPropertyOptional({ enum: ['pos', 'website', 'phone', 'chowdeck', 'clove'] })
   @IsOptional()
-  @IsEnum(['pos', 'website', 'phone'])
-  channel?: 'pos' | 'website' | 'phone';
+  @IsEnum(['pos', 'website', 'phone', 'chowdeck', 'clove'])
+  channel?: 'pos' | 'website' | 'phone' | 'chowdeck' | 'clove';
 
   @ApiPropertyOptional()
   @IsOptional()

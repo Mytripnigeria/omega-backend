@@ -278,6 +278,19 @@ export class OrderResponseDto {
     type: String,
     format: 'date-time',
     nullable: true,
+    description:
+      'When the counter sent the order to the kitchen. The order stays ' +
+      'PENDING; this records the hand-over, and is what moves a Cloove ' +
+      'kitchen ticket to `queued`.',
+  })
+  @Expose()
+  @Type(() => Date)
+  sentToKitchenAt: Date | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
     description: 'When the order entered PREPARING (kitchen countdown anchor).',
   })
   @Expose()

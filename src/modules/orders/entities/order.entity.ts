@@ -143,6 +143,18 @@ export class OrderEntity {
     format: 'date-time',
     nullable: true,
     description:
+      'When the counter handed the order to the kitchen. Not a lifecycle ' +
+      'transition — the order stays PENDING until a cook starts preparing — ' +
+      'but it is what moves a Cloove kitchen ticket to `queued`.',
+  })
+  @Column({ type: 'timestamptz', nullable: true })
+  sentToKitchenAt: Date | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description:
       'When the order entered PREPARING. The kitchen countdown anchors on ' +
       'this so it only starts ticking once prep actually begins.',
   })

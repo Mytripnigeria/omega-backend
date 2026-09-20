@@ -36,6 +36,12 @@ export interface CloveEventBody {
  *     an order still arrives when the webhook was never registered or a
  *     delivery was lost. A merchant tested a chatbot order with neither in
  *     place and, naturally, nothing reached the workstation.
+ *
+ * Both doors apply the same rule: **an order is registered only once Cloove
+ * says it is paid** (see `isPaid`). Cloove announces an order as soon as its
+ * assistant records it, which is why unpaid orders were reaching the
+ * workstation; the paid one comes back through the `payment.received` /
+ * `order.updated` event, or through the next pull.
  */
 @Injectable()
 export class CloveIngestService implements OnModuleInit {
@@ -106,13 +112,24 @@ export class CloveIngestService implements OnModuleInit {
    * never more than a day back. Cloove's list is newest-first and unbounded,
    * and every order it holds is "completed" once paid — so without a window
    * the first automatic pull would put July's orders on today's counter.
+   *
+   * The window is also held open back to the oldest order the last pass saw
+   * but did not register — one awaiting payment, or one whose ingest failed.
+   * Without that, an order seen unpaid at 10:00 and paid at 11:00 would
+   * already be behind the window when the payment lands, and the pull — the
+   * door that exists precisely for merchants whose webhook never fires —
+   * would never bring it in. The 24-hour floor still applies, so an abandoned
+   * order stops holding the window open after a day.
    */
   static pullWindowStart(integration: CloveIntegrationEntity, now = Date.now()): number {
     const floor = now - CloveIngestService.PULL_WINDOW_MS;
     const last = integration.lastOrderSyncAt
       ? new Date(integration.lastOrderSyncAt).getTime() - CloveIngestService.PULL_OVERLAP_MS
       : 0;
-    return Math.max(floor, last);
+    const unsettled = integration.oldestUnsettledOrderAt
+      ? new Date(integration.oldestUnsettledOrderAt).getTime()
+      : Number.POSITIVE_INFINITY;
+    return Math.max(floor, Math.min(last, unsettled));
   }
 
   private placedAt(order: CloveOrder): number | null {
@@ -139,6 +156,36 @@ export class CloveIngestService implements OnModuleInit {
     return !['cancelled', 'canceled', 'refunded', 'draft', 'voided'].includes(status);
   }
 
+  /**
+   * Whether the customer has actually paid.
+   *
+   * The merchant found unpaid orders sitting on the workstation: Cloove posts
+   * `order.created` the moment its assistant records the order, long before
+   * any money arrives. Cloove computes `paymentStatus` from the totals —
+   * `pending` (nothing collected), `partial`, `paid` (`amountPaid >=
+   * totalAmount`) — so `paid` is the only value that means the order is safe
+   * to make. Anything else, including a missing field, is treated as unpaid:
+   * the order is left alone and picked up later, when the `payment.received`
+   * / `order.updated` event or the next pull sees it settled.
+   *
+   * `amountPaid` is checked as a fallback only — some list payloads have
+   * carried the totals without the derived field.
+   */
+  static isPaid(order: CloveOrder): boolean {
+    const status = (order.paymentStatus ?? '').trim().toLowerCase();
+    if (status) return status === 'paid';
+    const paid = Number(order.amountPaid ?? NaN);
+    const total = Number(order.totalAmount ?? NaN);
+    if (!Number.isFinite(paid) || !Number.isFinite(total) || total <= 0) return false;
+    return paid >= total;
+  }
+
+  /** How an unpaid order is reported back to the merchant. */
+  private static unpaidReason(order: CloveOrder): string {
+    const status = (order.paymentStatus ?? '').trim().toLowerCase();
+    return `awaiting payment on Cloove (paymentStatus ${status || 'unknown'})`;
+  }
+
   private reference(order: CloveOrder): string {
     return `CLOVE-${order.id}`;
   }
@@ -154,9 +201,11 @@ export class CloveIngestService implements OnModuleInit {
     const creds = this.clove.credentialsOf(integration);
     const page = await this.client.listOrders(creds, 1, opts?.limit ?? 25);
     const since = CloveIngestService.pullWindowStart(integration);
+    /** The earliest order this pass saw but did not register; see pullWindowStart. */
+    let oldestUnsettled = Number.POSITIVE_INFINITY;
     const results: Array<{
       cloveOrderId: string;
-      outcome: 'ingested' | 'duplicate' | 'cancelled' | 'skipped' | 'failed';
+      outcome: 'ingested' | 'duplicate' | 'cancelled' | 'skipped' | 'unpaid' | 'failed';
       orderNumber?: number;
       reason?: string;
     }> = [];
@@ -181,6 +230,17 @@ export class CloveIngestService implements OnModuleInit {
         });
         continue;
       }
+      // Only a paid order goes on a counter. An unpaid one is left where it
+      // is and re-examined on the next pass — the window keeps it in view.
+      if (!CloveIngestService.isPaid(order)) {
+        results.push({
+          cloveOrderId: order.id,
+          outcome: 'unpaid',
+          reason: CloveIngestService.unpaidReason(order),
+        });
+        if (placed !== null && placed < oldestUnsettled) oldestUnsettled = placed;
+        continue;
+      }
       try {
         const res = await this.ingestOrder(integration, order);
         results.push({
@@ -194,10 +254,16 @@ export class CloveIngestService implements OnModuleInit {
           outcome: 'failed',
           reason: (err as Error).message,
         });
+        // A failed ingest is retried on the next pass rather than dropped out
+        // of the window with it.
+        if (placed !== null && placed < oldestUnsettled) oldestUnsettled = placed;
       }
     }
 
-    await this.clove.markOrderSync(integration.id);
+    await this.clove.markOrderSync(
+      integration.id,
+      Number.isFinite(oldestUnsettled) ? new Date(oldestUnsettled) : null,
+    );
     return {
       pulled: (page.data ?? []).length,
       ingested: results.filter((r) => r.outcome === 'ingested').length,
@@ -205,6 +271,8 @@ export class CloveIngestService implements OnModuleInit {
       /** Local orders cancelled because the customer cancelled on Cloove. */
       cancelled: results.filter((r) => r.outcome === 'cancelled').length,
       skipped: results.filter((r) => r.outcome === 'skipped').length,
+      /** Seen but not registered: the customer has not paid on Cloove yet. */
+      unpaid: results.filter((r) => r.outcome === 'unpaid').length,
       /** Of the skipped, how many were simply older than the pull window. */
       skippedOld: results.filter((r) => r.reason === 'older than the pull window').length,
       failed: results.filter((r) => r.outcome === 'failed').length,
@@ -264,6 +332,24 @@ export class CloveIngestService implements OnModuleInit {
         return closed.cancelled
           ? { handled: true, cancelled: true, orderId: closed.orderId, orderNumber: closed.orderNumber }
           : { handled: true, skipped: true, reason: closed.reason ?? `status ${order.status}` };
+      }
+      // The gate the merchant asked for: an order only reaches the workstation
+      // once Cloove says it is paid. `order.created` fires the moment the
+      // assistant records the order, so without this the kitchen starts making
+      // food nobody has paid for. The later `payment.received` / `order.updated`
+      // event brings the same order back here, and the two-minute pull is the
+      // backstop if that delivery is ever lost.
+      if (!CloveIngestService.isPaid(order)) {
+        this.logger.log(
+          `Cloove order ${order.shortCode ?? order.id} not registered — ` +
+            CloveIngestService.unpaidReason(order),
+        );
+        return {
+          handled: true,
+          skipped: true,
+          unpaid: true,
+          reason: CloveIngestService.unpaidReason(order),
+        };
       }
       return this.ingestOrder(integration, order);
     }
@@ -370,6 +456,8 @@ export class CloveIngestService implements OnModuleInit {
       },
       local.id,
       { reason: `Cancelled on Cloove (${cloveOrder.status})` },
+      // Cloove cancelled it; telling Cloove again would only fail.
+      { skipExternalPush: true },
     );
     this.logger.log(
       `Cloove order ${cloveOrder.shortCode ?? cloveOrder.id} cancelled on Cloove — #${local.orderNumber} cancelled here`,

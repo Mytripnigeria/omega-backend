@@ -100,9 +100,24 @@ export interface CloveOrder {
   id: string;
   shortCode: string | null;
   status: string;
+  /**
+   * `pending` (nothing collected) | `partial` | `paid`. Cloove computes it
+   * from the totals: paid means `amountPaid >= totalAmount`. Only a paid
+   * order is put on a counter — see CloveIngestService.isPaid.
+   */
   paymentStatus: string | null;
   items?: CloveOrderItem[] | null;
   totalAmount?: number | string | null;
+  amountPaid?: number | string | null;
+  remainingAmount?: number | string | null;
+  /**
+   * The order's kitchen ticket. Null when the order was never routed to the
+   * kitchen on Cloove (created without `send_to_kitchen`), in which case
+   * `POST /v1/orders/:id/kitchen-status` answers 404.
+   */
+  kitchenTicketId?: string | null;
+  /** `queued` | `preparing` | `ready` | `served`, or null with no ticket. */
+  kitchenTicketStatus?: string | null;
   currency?: string | null;
   customer?: {
     id?: string | null;
@@ -117,6 +132,19 @@ export interface CloveOrder {
   createdAt?: string;
   occurredAt?: string;
 }
+
+/** Per-call knobs; see CloveClient.request. */
+interface CloveRequestOptions {
+  /** Internal: which 429 retry this is. */
+  attempt?: number;
+  headers?: Record<string, string>;
+  /** False for calls a person is waiting on — fail fast instead of waiting out the window. */
+  retryOn429?: boolean;
+  timeoutMs?: number;
+}
+
+/** The prep stages a Cloove kitchen ticket can hold. */
+export type CloveKitchenStatus = 'queued' | 'preparing' | 'ready' | 'served';
 
 export interface ClovePage<T> {
   data: T[];
@@ -162,6 +190,20 @@ export class CloveClient {
   /** Tries per call when Cloove answers 429 — a publish is ~80 calls. */
   private static readonly MAX_ATTEMPTS = 3;
 
+  /** Nothing waits on Cloove longer than this; Cloove answers in ~0.7 s. */
+  static readonly DEFAULT_TIMEOUT_MS = 20_000;
+  /** A cashier is watching this one, so it fails fast instead of hanging. */
+  static readonly INTERACTIVE_TIMEOUT_MS = 10_000;
+
+  /**
+   * `AbortSignal.timeout` where the runtime has it (Node 18+), and nothing
+   * where it does not — an older runtime loses the timeout, not the call.
+   */
+  private static timeoutSignal(ms: number): AbortSignal | undefined {
+    const factory = (AbortSignal as { timeout?: (ms: number) => AbortSignal }).timeout;
+    return typeof factory === 'function' ? factory.call(AbortSignal, ms) : undefined;
+  }
+
   /**
    * How long to wait before attempt N+1 after a 429. Cloove's window is a
    * minute and its `Retry-After` is usually absent (`meta.retryAfter: null`),
@@ -179,32 +221,47 @@ export class CloveClient {
     method: string,
     path: string,
     body?: unknown,
-    attempt = 1,
+    opts: CloveRequestOptions = {},
   ): Promise<T> {
+    const attempt = opts.attempt ?? 1;
     const base = (creds.baseUrl || 'https://api.clooveai.com').replace(/\/+$/, '');
-    const res = await fetch(`${base}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${creds.apiKey}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        // Required: Cloove sits behind Cloudflare, which rejects default
-        // library user agents with error 1010 (a confusing 403).
-        'User-Agent': 'OmegaOS/1.0 (+https://app.omega.com.ng)',
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${base}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${creds.apiKey}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          // Required: Cloove sits behind Cloudflare, which rejects default
+          // library user agents with error 1010 (a confusing 403).
+          'User-Agent': 'OmegaOS/1.0 (+https://app.omega.com.ng)',
+          ...(opts.headers ?? {}),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        // Nothing may hang: a status push runs inside a cashier's button
+        // press, and an unanswered socket would otherwise hold the POS (and a
+        // request thread) until the proxy gave up.
+        signal: CloveClient.timeoutSignal(opts.timeoutMs ?? CloveClient.DEFAULT_TIMEOUT_MS),
+      });
+    } catch (err) {
+      const aborted = (err as Error)?.name === 'AbortError' || (err as Error)?.name === 'TimeoutError';
+      throw new CloveApiError(
+        aborted ? 'Cloove did not answer in time' : `Could not reach Cloove: ${(err as Error).message}`,
+        aborted ? 504 : 502,
+      );
+    }
 
-    if (res.status === 429 && attempt < CloveClient.MAX_ATTEMPTS) {
-      // 120 calls per window; Cloove says how long to wait. Waiting here,
-      // inside the call, keeps a publish that brushes the limit correct
-      // rather than half-done.
+    // A publish is ~64 calls and must survive brushing the limit, so it waits
+    // and tries again. An interactive status push does not: 15 s then 30 s of
+    // silence under a cashier's finger is worse than a clear "try again".
+    if (res.status === 429 && opts.retryOn429 !== false && attempt < CloveClient.MAX_ATTEMPTS) {
       const seconds = CloveClient.retryDelaySeconds(res.headers.get('retry-after'), attempt);
       this.logger.warn(
         `${method} ${path} -> 429, retrying in ${seconds}s (attempt ${attempt}/${CloveClient.MAX_ATTEMPTS})`,
       );
       await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
-      return this.request<T>(creds, method, path, body, attempt + 1);
+      return this.request<T>(creds, method, path, body, { ...opts, attempt: attempt + 1 });
     }
 
     const text = await res.text();
@@ -230,7 +287,7 @@ export class CloveClient {
         .join('; ');
       let message = detail || payload.message || payload.error || `HTTP ${res.status}`;
       if (res.status === 429) {
-        message = `${message} Cloove allows 120 calls a minute — publish again in a minute.`;
+        message = `${message} Cloove allows 120 calls a minute — try again in a minute.`;
       }
       if (res.status === 401 || res.status === 403) {
         // Name the most common cause outright: Cloove issues both a
@@ -365,15 +422,65 @@ export class CloveClient {
   }
 
   /**
-   * Cloove accepts only `pending`, `completed` and `cancelled` — anything else
-   * comes back 422 "The selected status is invalid".
+   * The ORDER status. Cloove accepts only `scheduled`, `pending`, `completed`
+   * and `cancelled` here — anything else comes back 422 "The selected status
+   * is invalid". Prep stages live on the kitchen ticket instead; see
+   * `updateKitchenStatus`.
    */
   async updateOrderStatus(
     creds: CloveCredentials,
     cloveOrderId: string,
     status: string,
+    cancellationReason?: string,
   ): Promise<void> {
-    await this.request(creds, 'PATCH', `/v1/orders/${cloveOrderId}`, { status });
+    await this.request(
+      creds,
+      'PATCH',
+      `/v1/orders/${cloveOrderId}`,
+      {
+        status,
+        ...(cancellationReason ? { cancellation_reason: cancellationReason } : {}),
+      },
+      // Staff are waiting on this one (Reject at the counter).
+      { retryOn429: false, timeoutMs: CloveClient.INTERACTIVE_TIMEOUT_MS },
+    );
+  }
+
+  /**
+   * Moves the order's KITCHEN TICKET to a prep stage — the same transition
+   * Cloove's own Kitchen board makes, so the customer gets the WhatsApp stage
+   * message the business configured and a `kitchen_ticket.status_updated`
+   * event fires (docs.clooveai.com/orders-api, "Update kitchen status").
+   *
+   * Stages are not ordered: a ticket may move forward or back to any stage,
+   * which is what the workstation's "Call back" needs. Repeating the current
+   * stage is a safe 200 that sends nothing, and the `Idempotency-Key` makes a
+   * retried request return the original response instead of messaging the
+   * customer twice.
+   *
+   * 404 "This order has no associated kitchen ticket" means the order was
+   * created on Cloove without `send_to_kitchen`; there is no API that adds a
+   * ticket afterwards, so nothing in our payload can fix it.
+   */
+  async updateKitchenStatus(
+    creds: CloveCredentials,
+    cloveOrderId: string,
+    status: CloveKitchenStatus,
+    idempotencyKey?: string,
+  ): Promise<void> {
+    await this.request(
+      creds,
+      'POST',
+      `/v1/orders/${cloveOrderId}/kitchen-status`,
+      { status },
+      {
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+        // A cook is holding the screen: fail fast rather than wait out a
+        // rate-limit window under their finger.
+        retryOn429: false,
+        timeoutMs: CloveClient.INTERACTIVE_TIMEOUT_MS,
+      },
+    );
   }
 
   /** Cheap authenticated call behind "Test connection". */

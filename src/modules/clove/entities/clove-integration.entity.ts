@@ -77,6 +77,19 @@ export class CloveIntegrationEntity {
   @Column({ type: 'timestamptz', nullable: true })
   lastOrderSyncAt: Date | null;
 
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description:
+      'The oldest order the pull saw but did not register — awaiting payment ' +
+      'on Cloove, or an ingest that failed. The pull window is held open back ' +
+      'to it, so an order paid long after it was placed is still picked up. ' +
+      'Null when nothing is outstanding.',
+  })
+  @Column({ type: 'timestamptz', nullable: true })
+  oldestUnsettledOrderAt: Date | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;

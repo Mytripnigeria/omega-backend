@@ -43,7 +43,7 @@ import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.servic
 import { TableEntity, TableStatus } from '../tables/entities/table.entity';
 import { PushService } from '../push-notifications/push.service';
 import { ChowdeckService } from '../chowdeck/chowdeck.service';
-import { CloveService } from '../clove/clove.service';
+import { CLOVE_SEND_TO_KITCHEN, CloveService } from '../clove/clove.service';
 import { ProductIngredientEntity } from '../products/entities/product-ingredient.entity';
 import { ProductVariationEntity } from '../products/entities/product-variation.entity';
 import { ComboItemEntity } from '../combos/entities/combo-item.entity';
@@ -1178,6 +1178,11 @@ export class OrdersService {
       }
     }
 
+    // Cloove first: the marketplace has to accept the move before we make it,
+    // so the two systems can never disagree about where an order is. A
+    // failure here throws and nothing below runs.
+    await this.pushCloveFirst(order, dto.status);
+
     const fromStatus = order.status;
     order.status = dto.status;
 
@@ -1268,12 +1273,62 @@ export class OrdersService {
   }
 
   /**
+   * "Send to kitchen" — the counter's next step after accepting an order.
+   *
+   * It is not a lifecycle transition here: an accepted order is already
+   * PENDING and already sitting in the kitchen board's New column, waiting for
+   * a cook to press Start Preparing. What it does do is mark the ticket as
+   * handed over (so the counter stops offering the button) and, on Cloove,
+   * move the kitchen ticket to `queued` — the stage the merchant's flow calls
+   * for at this point, and the one that tells the customer their order is in.
+   *
+   * Cloove is called first; if it refuses, nothing is marked here.
+   */
+  async sendToKitchen(actor: ActorContext, id: string): Promise<OrderResponseDto> {
+    const order = await this.findEntity(actor, id);
+    if (order.status !== OrderStatus.PENDING) {
+      throw new BadRequestException(
+        order.status === OrderStatus.INITIATED
+          ? 'Accept this order before sending it to the kitchen'
+          : `A ${order.status} order cannot be sent to the kitchen`,
+      );
+    }
+    // Idempotent, and deliberately so: pressing the button twice must not
+    // drag a ticket Cloove has already moved on to back to `queued`.
+    if (order.sentToKitchenAt) return this.findOne(actor, order.id);
+
+    await this.pushCloveFirst(order, CLOVE_SEND_TO_KITCHEN);
+
+    // A targeted update, not a save of the loaded graph: findEntity brings the
+    // items along and this changes one column on the order itself.
+    order.sentToKitchenAt = new Date();
+    await this.orderRepo.update({ id: order.id }, { sentToKitchenAt: order.sentToKitchenAt });
+
+    this.activityLog.record({
+      actorType: actor.sub_type,
+      actorId: actor.sub,
+      actorName: actor.actorName ?? 'Unknown',
+      action: 'order.sent_to_kitchen',
+      businessId: actor.businessId,
+      storeId: order.storeId,
+      resourceType: 'order',
+      resourceId: order.id,
+      metadata: { orderNumber: order.orderNumber },
+    });
+
+    return this.findOne(actor, order.id);
+  }
+
+  /**
    * Relays a status change to the marketplace the order came from.
    *
    * Only marketplace orders (those carrying an `externalReference`) do
    * anything. Deliberately swallows every failure: an outage at Chowdeck must
    * never surface as a failed status change in the POS, and the attempt is
    * logged inside the integration for replay.
+   *
+   * Cloove is **not** relayed here — see `pushCloveFirst`, which runs before
+   * the local change instead of after it.
    */
   private async pushExternalStatus(
     order: OrderEntity,
@@ -1297,32 +1352,52 @@ export class OrdersService {
           `Chowdeck status push failed for order ${order.orderNumber}: ${(err as Error).message}`,
         );
       }
-      return;
     }
+  }
 
-    if (order.channel === 'clove') {
-      try {
-        await this.clove.pushStatus({
-          storeId: order.storeId,
-          externalReference: order.externalReference,
-          toStatus,
-        });
-      } catch (err) {
-        this.logger.warn(
-          `Cloove status push failed for order ${order.orderNumber}: ${(err as Error).message}`,
-        );
-      }
-    }
+  /**
+   * Cloove before us, on the merchant's instruction: "all update request first
+   * goes to clove, if returned successfully and request is implemented, it
+   * then makes the necessary update to omega, all in that one singular
+   * request… to make sure omega always shares same order conditions with
+   * what's on clove."
+   *
+   * So this runs BEFORE the local write and deliberately does not catch:
+   * if Cloove refuses the transition, or cannot be reached, the exception
+   * travels back to the workstation and the order stays exactly where it was
+   * on both sides. Anything that is not a Cloove order is a no-op.
+   */
+  private async pushCloveFirst(
+    order: OrderEntity,
+    toStatus: string,
+    reason: string | null = null,
+  ): Promise<void> {
+    if (order.channel !== 'clove' || !order.externalReference) return;
+    await this.clove.pushStatus({
+      storeId: order.storeId,
+      externalReference: order.externalReference,
+      toStatus,
+      reason,
+    });
   }
 
   async cancel(
     actor: ActorContext,
     id: string,
     dto: CancelOrderDto,
+    opts?: { skipExternalPush?: boolean },
   ): Promise<OrderResponseDto> {
     const order = await this.findEntity(actor, id);
     if (order.status === OrderStatus.COMPLETED || order.status === OrderStatus.CANCELLED) {
       throw new BadRequestException(`Cannot cancel a ${order.status} order`);
+    }
+
+    // Reject/Cancel on a Cloove order cancels it on Cloove first; only then is
+    // it cancelled here. `skipExternalPush` is for the opposite direction —
+    // the order was cancelled on Cloove and we are catching up, so pushing it
+    // back would be a round trip that can only fail.
+    if (!opts?.skipExternalPush) {
+      await this.pushCloveFirst(order, OrderStatus.CANCELLED, dto.reason ?? null);
     }
 
     const fromStatus = order.status;
