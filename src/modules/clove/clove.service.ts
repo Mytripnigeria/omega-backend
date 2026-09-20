@@ -35,6 +35,19 @@ import { CategoryEntity } from '../categories/entities/category.entity';
  */
 export const CLOVE_SEND_TO_KITCHEN = 'send_to_kitchen';
 
+/**
+ * What came of relaying a local change to Cloove.
+ *
+ * `pushed` false with a `refusal` means Cloove answered and declined — the
+ * local change still goes ahead, and the reason is recorded on the order so
+ * the divergence is visible rather than silent. A Cloove that is merely down
+ * does not come back here at all: it throws.
+ */
+export interface ClovePushResult {
+  pushed: boolean;
+  refusal?: string;
+}
+
 /** The only join Cloove offers is the name, so compare them loosely. */
 const normalise = (name: string): string =>
   (name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -916,13 +929,13 @@ export class CloveService {
     externalReference: string;
     toStatus: string;
     reason?: string | null;
-  }): Promise<void> {
+  }): Promise<ClovePushResult> {
     const target = CloveService.cloveTargetFor(params.toStatus);
-    if (!target) return;
+    if (!target) return { pushed: false };
 
     // externalReference is stamped as `CLOVE-<cloveOrderId>`.
     const cloveOrderId = params.externalReference.replace(/^CLOVE-/, '');
-    if (!cloveOrderId) return;
+    if (!cloveOrderId) return { pushed: false };
 
     const rows = await this.integrationRepo.find({
       where: { storeId: params.storeId, isEnabled: true },
@@ -937,7 +950,7 @@ export class CloveService {
         `No enabled Cloove channel on store ${params.storeId} — ` +
           `${params.toStatus} for order ${cloveOrderId} was not sent`,
       );
-      return;
+      return { pushed: false, refusal: 'no Cloove channel is connected to this store' };
     }
 
     // A store may hold several Cloove channels (the merchant runs a live one
@@ -969,7 +982,7 @@ export class CloveService {
         this.logger.log(
           `Cloove ${target.kind} status ${target.status} sent for order ${cloveOrderId}`,
         );
-        return;
+        return { pushed: true };
       } catch (err) {
         lastError = err;
         errors.push(err);
@@ -985,18 +998,55 @@ export class CloveService {
       }
     }
 
-    // An order none of the connected workspaces has ever heard of is not a
-    // sync failure — there is nothing there to keep in step. It happens with
-    // the hub's rehearsal order (injected locally, never created on Cloove)
-    // and with an order whose channel the merchant has since replaced.
-    // Trapping those on the counter forever would help nobody.
-    if (errors.length > 0 && errors.every((e) => CloveService.isUnknownOrder(e))) {
+    // Cloove answered, and its answer was "no, not for this order". Retrying
+    // cannot change that, so the counter carries on and the divergence is
+    // recorded rather than the order being frozen. Proved against the live
+    // account: the merchant's assistant creates orders with no kitchen ticket
+    // (`kitchenTicketId: null`), and `PATCH {send_to_kitchen: true}` is
+    // silently ignored, so those orders can NEVER take a prep stage; and an
+    // order paid by automated bank transfer cannot be cancelled through the
+    // API at all. Blocking on either would leave staff with dead buttons.
+    if (errors.length > 0 && errors.every((e) => CloveService.isRefusal(e))) {
+      const refusal = CloveService.refusalText(bestError ?? lastError);
       this.logger.warn(
-        `Cloove does not know order ${cloveOrderId} — ${params.toStatus} applied locally only`,
+        `Cloove refused ${params.toStatus} for order ${cloveOrderId} (${refusal}) — ` +
+          'applied here only',
       );
-      return;
+      return { pushed: false, refusal };
     }
+    // Everything else — unreachable, 5xx, rate-limited, bad key — is a
+    // condition that clears. There the merchant's rule stands: nothing moves
+    // here until Cloove has taken it.
     throw CloveService.pushFailure(bestError ?? lastError, target.kind);
+  }
+
+  /**
+   * A refusal is Cloove answering about this order's own state, as opposed to
+   * Cloove being unreachable or unhappy with our key:
+   *   - 404 `This order has no associated kitchen ticket` — the order was
+   *     never routed to Cloove's kitchen and no endpoint can route it now;
+   *   - 404 `Order not found` — no connected workspace holds this order (the
+   *     hub's rehearsal order, or a channel the merchant has replaced);
+   *   - 400 / 409 / 422 — Cloove will not make this transition, e.g. a
+   *     completed automated bank-transfer order cannot be cancelled.
+   */
+  private static isRefusal(err: unknown): boolean {
+    return (
+      err instanceof CloveApiError &&
+      [400, 404, 409, 422].includes(err.upstreamStatus)
+    );
+  }
+
+  /** The refusal, worded for the order's history and the activity log. */
+  private static refusalText(err: unknown): string {
+    const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
+    if (/kitchen ticket/i.test(message)) {
+      return 'Cloove has no kitchen ticket for this order, so its prep stage was not updated there';
+    }
+    if (/not found/i.test(message)) {
+      return 'Cloove does not have this order';
+    }
+    return message.replace(/^Cloove:\s*/, 'Cloove refused: ');
   }
 
   /** A key problem rather than an order problem. */

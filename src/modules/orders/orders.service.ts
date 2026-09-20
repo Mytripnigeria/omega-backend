@@ -1179,9 +1179,10 @@ export class OrdersService {
     }
 
     // Cloove first: the marketplace has to accept the move before we make it,
-    // so the two systems can never disagree about where an order is. A
-    // failure here throws and nothing below runs.
-    await this.pushCloveFirst(order, dto.status);
+    // so the two systems can never disagree about where an order is. An
+    // outage throws and nothing below runs; a refusal Cloove will never take
+    // (no kitchen ticket on their side) comes back here to be recorded.
+    const clove = await this.pushCloveFirst(order, dto.status);
 
     const fromStatus = order.status;
     order.status = dto.status;
@@ -1235,6 +1236,10 @@ export class OrdersService {
           toStatus: dto.status,
           actorId: actor.sub,
           actorType: actor.sub_type,
+          // When Cloove would not take the change, the order's own history
+          // says so — the alternative is a silent difference between the two
+          // systems, which is exactly what this work set out to remove.
+          reason: clove.refusal ?? null,
         }),
       );
       // A delivery order that's READY becomes available for the waiter to
@@ -1297,7 +1302,7 @@ export class OrdersService {
     // drag a ticket Cloove has already moved on to back to `queued`.
     if (order.sentToKitchenAt) return this.findOne(actor, order.id);
 
-    await this.pushCloveFirst(order, CLOVE_SEND_TO_KITCHEN);
+    const clove = await this.pushCloveFirst(order, CLOVE_SEND_TO_KITCHEN);
 
     // A targeted update, not a save of the loaded graph: findEntity brings the
     // items along and this changes one column on the order itself.
@@ -1313,7 +1318,10 @@ export class OrdersService {
       storeId: order.storeId,
       resourceType: 'order',
       resourceId: order.id,
-      metadata: { orderNumber: order.orderNumber },
+      metadata: {
+        orderNumber: order.orderNumber,
+        ...(clove.refusal ? { cloveNotSynced: clove.refusal } : {}),
+      },
     });
 
     return this.findOne(actor, order.id);
@@ -1371,14 +1379,20 @@ export class OrdersService {
     order: OrderEntity,
     toStatus: string,
     reason: string | null = null,
-  ): Promise<void> {
-    if (order.channel !== 'clove' || !order.externalReference) return;
-    await this.clove.pushStatus({
+  ): Promise<{ pushed: boolean; refusal?: string }> {
+    if (order.channel !== 'clove' || !order.externalReference) return { pushed: false };
+    const result = await this.clove.pushStatus({
       storeId: order.storeId,
       externalReference: order.externalReference,
       toStatus,
       reason,
     });
+    if (result.refusal) {
+      this.logger.warn(
+        `Order ${order.orderNumber}: Cloove did not take ${toStatus} — ${result.refusal}`,
+      );
+    }
+    return result;
   }
 
   async cancel(
@@ -1396,9 +1410,9 @@ export class OrdersService {
     // it cancelled here. `skipExternalPush` is for the opposite direction —
     // the order was cancelled on Cloove and we are catching up, so pushing it
     // back would be a round trip that can only fail.
-    if (!opts?.skipExternalPush) {
-      await this.pushCloveFirst(order, OrderStatus.CANCELLED, dto.reason ?? null);
-    }
+    const clove = opts?.skipExternalPush
+      ? { pushed: false as boolean, refusal: undefined as string | undefined }
+      : await this.pushCloveFirst(order, OrderStatus.CANCELLED, dto.reason ?? null);
 
     const fromStatus = order.status;
     const wasPaid = order.paymentStatus === 'paid';
@@ -1429,7 +1443,10 @@ export class OrdersService {
           toStatus: OrderStatus.CANCELLED,
           actorId: actor.sub,
           actorType: actor.sub_type,
-          reason: dto.reason ?? null,
+          // Cloove will not cancel an order it collected by automated bank
+          // transfer; the order's history has to say that it is still live
+          // there, so somebody refunds it.
+          reason: [dto.reason ?? null, clove.refusal].filter(Boolean).join(' · ') || null,
         }),
       );
     });
