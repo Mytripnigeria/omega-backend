@@ -44,6 +44,7 @@ describe('CloveIngestService.simulateIncomingOrder', () => {
         ),
       })),
       updateStatus: jest.fn(),
+      recordChannelPayment: jest.fn(async () => undefined),
     };
     const customers = {
       findOrCreateFromChannel: jest.fn(async () => ({ id: 'cust-1' })),
@@ -201,6 +202,7 @@ describe('CloveIngestService — orders coming in', () => {
         orderRepo.rows.push(row);
         return row;
       }),
+      recordChannelPayment: jest.fn(async () => undefined),
       cancel: jest.fn(async (_a: unknown, id: string) => {
         const row = orderRepo.rows.find((r) => r.id === id);
         if (row) row.status = 'cancelled';
@@ -589,6 +591,64 @@ describe('CloveIngestService — orders coming in', () => {
       const stamped = orderRepo.update.mock.calls.at(-1)?.[1] as unknown as Record<string, any>;
       expect(stamped.deliveryFee).toBeUndefined();
       expect(stamped.paidAmount).toBe(400);
+    });
+  });
+
+  /**
+   * Merchant: "clove orders are Not recording under transactions which
+   * automatically translates to it's absence on register and account
+   * balancing, all clove transactions method should be Card."
+   *
+   * Two separate books were missing the sale: the register buckets orders by
+   * `paymentChannel` (null belonged to no bucket), and account balancing reads
+   * the transactions ledger, which was never written at all.
+   */
+  describe('money', () => {
+    it('books the sale as card, so the register can see it', async () => {
+      const { service, orderRepo } = build();
+
+      await service.handleWebhook(
+        { type: 'order.created', data: { entityType: 'sale', entityId: 'ord-1' } },
+        'int-1',
+      );
+
+      const stamped = orderRepo.update.mock.calls.at(-1)?.[1] as unknown as Record<string, any>;
+      expect(stamped.paymentChannel).toBe('card');
+      expect(stamped.paymentStatus).toBe('paid');
+      expect(stamped.paidAmount).toBe(400);
+    });
+
+    it('writes the payment to the transactions ledger', async () => {
+      const { service, orders } = build();
+
+      await service.handleWebhook(
+        { type: 'order.created', data: { entityType: 'sale', entityId: 'ord-1' } },
+        'int-1',
+      );
+
+      expect(orders.recordChannelPayment).toHaveBeenCalledWith(
+        'order-100',
+        { method: 'card', channelName: 'Cloove' },
+      );
+    });
+
+    it('books the delivery fee with it, not just the food', async () => {
+      const { service, orderRepo } = build({
+        // One ₦400 line, plus the ₦1,000 delivery Cloove charges outside it.
+        orders: [cloveOrder({
+          subtotalAmount: 400, totalAmount: 1400, discountAmount: 0,
+          notes: 'Delivery address: 1 Test Street\nDelivery fee: ₦1,000',
+        })],
+      });
+
+      await service.handleWebhook(
+        { type: 'order.created', data: { entityType: 'sale', entityId: 'ord-1' } },
+        'int-1',
+      );
+
+      const stamped = orderRepo.update.mock.calls.at(-1)?.[1] as unknown as Record<string, any>;
+      expect(stamped.deliveryFee).toBe(1000);
+      expect(stamped.paidAmount).toBe(1400);
     });
   });
 

@@ -160,6 +160,14 @@ interface CloveRequestOptions {
 /** The prep stages a Cloove kitchen ticket can hold. */
 export type CloveKitchenStatus = 'queued' | 'preparing' | 'ready' | 'served';
 
+/** What came back from Cloove's "Send to Kitchen". */
+export interface CloveKitchenHandover {
+  kitchenTicketId: string | null;
+  kitchenTicketStatus: string | null;
+  /** Whether Cloove messaged the customer, and why not when it did not. */
+  notification: { status?: string; reason?: string } | null;
+}
+
 export interface ClovePage<T> {
   data: T[];
   meta?: { total?: number; page?: number; perPage?: number; hasMore?: boolean };
@@ -458,6 +466,45 @@ export class CloveClient {
       // Staff are waiting on this one (Reject at the counter).
       { retryOn429: false, timeoutMs: CloveClient.INTERACTIVE_TIMEOUT_MS },
     );
+  }
+
+  /**
+   * Creates the order's kitchen ticket — Cloove's own "Send to Kitchen", which
+   * they shipped on 2026-09-21 for exactly this case.
+   *
+   * Their assistant records orders with `send_to_kitchen: false` (the order is
+   * booked immediately so payment can be chased, but prep must not start until
+   * the money clears), which left those orders with no ticket and nothing our
+   * POS could move. This is the trigger that creates one, and it sends the
+   * customer the initial-stage WhatsApp message.
+   *
+   * `409` means the order already has a ticket — nothing is wrong, the stage
+   * endpoint simply takes over from there.
+   */
+  async sendOrderToKitchen(
+    creds: CloveCredentials,
+    cloveOrderId: string,
+    idempotencyKey?: string,
+  ): Promise<CloveKitchenHandover> {
+    const res = await this.request<{
+      data?: CloveOrder;
+      meta?: { notification?: { status?: string; reason?: string } };
+    }>(
+      creds,
+      'POST',
+      `/v1/orders/${cloveOrderId}/send-to-kitchen`,
+      undefined,
+      {
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+        retryOn429: false,
+        timeoutMs: CloveClient.INTERACTIVE_TIMEOUT_MS,
+      },
+    );
+    return {
+      kitchenTicketId: res.data?.kitchenTicketId ?? null,
+      kitchenTicketStatus: res.data?.kitchenTicketStatus ?? null,
+      notification: res.meta?.notification ?? null,
+    };
   }
 
   /**

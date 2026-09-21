@@ -1278,6 +1278,42 @@ export class OrdersService {
   }
 
   /**
+   * Books money a sales channel collected on the merchant's behalf.
+   *
+   * A Cloove order arrives already paid — the customer paid Cloove, not the
+   * till — and the ingest used to stamp `paidAmount` straight onto the row.
+   * That left the sale out of the transactions ledger entirely, and with it
+   * out of the register and account balancing, because both read real
+   * payments. The channel money is booked here instead, as the merchant asked,
+   * under `card`: it is not cash in the drawer, and the cashier must not be
+   * asked to count it.
+   */
+  async recordChannelPayment(
+    orderId: string,
+    opts: { method: TransactionMethod; channelName: string },
+  ): Promise<void> {
+    const order = await this.orderRepo.findOne({ where: { id: orderId } });
+    if (!order || Number(order.paidAmount) <= 0) return;
+    await this.ledger.record({
+      businessId: order.businessId,
+      storeId: order.storeId,
+      type: 'credit',
+      purpose: 'order_payment',
+      amount: Number(order.paidAmount),
+      method: opts.method,
+      reference: order.externalReference,
+      description: `Order #${order.orderNumber} paid on ${opts.channelName}`,
+      linkedType: 'order',
+      linkedId: order.id,
+      customerId: order.customerId,
+      customerName: order.customerName,
+      // No cashier took this money, so no one's sales figures may claim it.
+      staffId: null,
+      staffName: opts.channelName,
+    });
+  }
+
+  /**
    * "Send to kitchen" — the counter's next step after accepting an order.
    *
    * It is not a lifecycle transition here: an accepted order is already
@@ -1642,6 +1678,38 @@ export class OrdersService {
           `Paystack refund failed: ${(err as Error).message}. Cancel rolled back.`,
         );
       }
+    }
+
+    // A marketplace order was booked on the ledger when it arrived (the
+    // channel had already taken the money), so rejecting it has to take that
+    // entry back off — otherwise the day's takings keep a sale that was never
+    // made. The money itself is refunded by the channel, not by us.
+    if (
+      order.externalReference &&
+      (order.channel === 'clove' || order.channel === 'chowdeck') &&
+      order.paymentStatus === 'paid' &&
+      Number(order.paidAmount) > 0
+    ) {
+      const channelName = order.channel === 'clove' ? 'Cloove' : 'Chowdeck';
+      await this.ledger.record(
+        {
+          businessId: order.businessId,
+          storeId: order.storeId,
+          type: 'debit',
+          purpose: 'order_refund',
+          amount: Number(order.paidAmount),
+          method: this.mapPaymentChannelToMethod(order.paymentChannel),
+          reference: order.externalReference,
+          description: `Order #${order.orderNumber} cancelled — refunded by ${channelName}`,
+          linkedType: 'order',
+          linkedId: order.id,
+          customerId: order.customerId,
+          customerName: order.customerName,
+          staffId: actor.sub_type === 'staff' ? actor.sub : null,
+          staffName: actor.actorName ?? null,
+        },
+        mgr,
+      );
     }
   }
 

@@ -975,11 +975,13 @@ export class CloveService {
       }
       try {
         if (target.kind === 'kitchen') {
-          await this.client.updateKitchenStatus(
+          await this.sendKitchenStage(
             this.credentialsOf(integration),
             cloveOrderId,
             target.status,
-            randomUUID(),
+            // "Send to kitchen" is the moment to ask Cloove to route the order
+            // to its own kitchen; the later stages just move a ticket.
+            params.toStatus === CLOVE_SEND_TO_KITCHEN,
           );
         } else {
           await this.client.updateOrderStatus(
@@ -1026,8 +1028,13 @@ export class CloveService {
     // the merchant can fix, and it still blocks.
     const answered = errors.filter((e) => !CloveService.isAuthFailure(e));
     if (answered.length > 0 && answered.every((e) => CloveService.isRefusal(e))) {
+      // With several channels the answers can differ — the one that owns the
+      // order explains the real problem ("no kitchen ticket"), while the
+      // others merely do not have it. Record the one staff can act on.
       const refusal = CloveService.refusalText(
-        bestError !== undefined && !CloveService.isAuthFailure(bestError) ? bestError : answered[0],
+        [...answered].sort(
+          (a, b) => CloveService.refusalRank(b) - CloveService.refusalRank(a),
+        )[0],
       );
       this.logger.warn(
         `Cloove refused ${params.toStatus} for order ${cloveOrderId} (${refusal}) — ` +
@@ -1039,6 +1046,55 @@ export class CloveService {
     // condition that clears. There the merchant's rule stands: nothing moves
     // here until Cloove has taken it.
     throw CloveService.pushFailure(bestError ?? lastError, target.kind);
+  }
+
+  /**
+   * Moves the kitchen ticket — and when the counter is handing the order over,
+   * creates that ticket first through Cloove's own "Send to Kitchen".
+   *
+   * Their assistant books orders with `send_to_kitchen: false` so payment can
+   * be chased before prep starts, which leaves no ticket for the stage
+   * endpoint to move. Pressing Kitchen here is precisely the trigger their
+   * endpoint exists for, so that is the call we make: it creates the ticket at
+   * `queued` and sends the customer the initial-stage WhatsApp message.
+   *
+   * A `409` means the order already had a ticket (an order created with
+   * `send_to_kitchen: true`, or a second press), and the stage push below
+   * takes over from there.
+   */
+  private async sendKitchenStage(
+    creds: CloveCredentials,
+    cloveOrderId: string,
+    status: CloveKitchenStatus,
+    isHandover: boolean,
+  ): Promise<void> {
+    if (isHandover) {
+      try {
+        const handed = await this.client.sendOrderToKitchen(creds, cloveOrderId, randomUUID());
+        this.logger.log(
+          `Cloove kitchen ticket ${handed.kitchenTicketId ?? '(unknown)'} created for order ` +
+            `${cloveOrderId} · customer notification: ${handed.notification?.status ?? 'n/a'}` +
+            (handed.notification?.reason ? ` (${handed.notification.reason})` : ''),
+        );
+        // The ticket is created at `queued`, which is exactly the stage a
+        // hand-over means — nothing further to send.
+        if (status === 'queued') return;
+      } catch (err) {
+        if (!CloveService.isAlreadySentToKitchen(err)) throw err;
+        this.logger.log(
+          `Cloove order ${cloveOrderId} was already sent to its kitchen — moving the stage instead`,
+        );
+      }
+    }
+    await this.client.updateKitchenStatus(creds, cloveOrderId, status, randomUUID());
+  }
+
+  /** Cloove's 409 when an order already has a kitchen ticket. */
+  private static isAlreadySentToKitchen(err: unknown): boolean {
+    return (
+      err instanceof CloveApiError &&
+      (err.upstreamStatus === 409 || /already been sent to the kitchen/i.test(err.message))
+    );
   }
 
   /**
@@ -1056,6 +1112,19 @@ export class CloveService {
       err instanceof CloveApiError &&
       [400, 404, 409, 422].includes(err.upstreamStatus)
     );
+  }
+
+  /**
+   * How useful a refusal is to whoever reads the order's history. "This order
+   * has no associated kitchen ticket" comes from the workspace that actually
+   * holds the order and says what to fix; "Order not found" just means that
+   * channel is not the right one.
+   */
+  private static refusalRank(err: unknown): number {
+    const message = err instanceof Error ? err.message : '';
+    if (/kitchen ticket/i.test(message)) return 2;
+    if (/not found/i.test(message)) return 0;
+    return 1;
   }
 
   /** The refusal, worded for the order's history and the activity log. */

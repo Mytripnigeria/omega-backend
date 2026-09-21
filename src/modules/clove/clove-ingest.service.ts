@@ -651,10 +651,21 @@ export class CloveIngestService implements OnModuleInit {
         externalReference: reference,
         ...(delivery.fee > 0 ? { deliveryFee: delivery.fee, total } : {}),
         paymentStatus: 'paid',
+        // Cloove collected the money, so it is not cash in the drawer. The
+        // merchant's instruction: book it as card. This is also what puts the
+        // sale on the register — expected totals are bucketed by this column,
+        // and a null channel belonged to no bucket at all.
+        paymentChannel: 'card',
         paidAmount: total,
         paidAt: new Date(),
       },
     );
+
+    // …and on the transactions ledger, which is what account balancing reads.
+    await this.orders.recordChannelPayment(created.id, {
+      method: 'card',
+      channelName: 'Cloove',
+    });
 
     this.logger.log(
       `Cloove order ${cloveOrder.id} ingested as #${created.orderNumber} ` +

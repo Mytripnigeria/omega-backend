@@ -431,8 +431,20 @@ describe('CloveService.pushStatus', () => {
     const rows = opts.channels ?? [integration];
     const integrationRepo = mockRepo(rows as never[]);
     const client = {
-      updateKitchenStatus: jest.fn(async () => undefined),
+      updateKitchenStatus: jest.fn(
+        async (
+          _c: unknown,
+          _id: string,
+          _s: string,
+          _key?: string,
+          _route?: boolean,
+        ) => undefined,
+      ),
       updateOrderStatus: jest.fn(async () => undefined),
+      sendOrderToKitchen: jest.fn(async () => ({
+        kitchenTicketId: 'tkt-1', kitchenTicketStatus: 'queued', notification: { status: 'sent' },
+      })),
+      getOrder: jest.fn(async () => null as Record<string, unknown> | null),
     };
     const service = new CloveService(
       integrationRepo as never,
@@ -479,15 +491,14 @@ describe('CloveService.pushStatus', () => {
     expect(client.updateOrderStatus).not.toHaveBeenCalled();
   });
 
-  it('sends Send-to-kitchen as a queued kitchen ticket', async () => {
+  it('hands the order to Cloove’s kitchen rather than moving a stage', async () => {
     const { service, client } = build();
 
     await push(service, 'send_to_kitchen');
 
-    expect(client.updateKitchenStatus).toHaveBeenCalledWith(
+    expect(client.sendOrderToKitchen).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: 'sk_live' }),
       'ord-1',
-      'queued',
       expect.any(String),
     );
   });
@@ -612,6 +623,23 @@ describe('CloveService.pushStatus', () => {
     expect(res.refusal).toMatch(/does not have this order/i);
   });
 
+  it('records the answer from the channel that actually holds the order', async () => {
+    const second = { ...integration, id: 'int-2' };
+    const { service, client } = build({ channels: [integration, second] });
+    client.updateKitchenStatus
+      // The wrong workspace simply does not have it…
+      .mockRejectedValueOnce(new CloveApiError('Order not found', 404) as never)
+      // …the right one explains what is actually wrong.
+      .mockRejectedValueOnce(
+        new CloveApiError('This order has no associated kitchen ticket', 404) as never,
+      );
+
+    const res = await push(service, 'ready');
+
+    expect(res.refusal).toMatch(/no kitchen ticket/i);
+    expect(res.refusal).not.toMatch(/does not have this order/i);
+  });
+
   it('does not trap an order Cloove has never heard of', async () => {
     const { service, client } = build();
     // The hub's rehearsal order lives only on our counter, and a channel the
@@ -719,5 +747,106 @@ describe('CloveService.removeConfig', () => {
     });
 
     expect(res.pushed).toBe(false);
+  });
+});
+
+/**
+ * Cloove shipped `POST /v1/orders/:id/send-to-kitchen` on 2026-09-21 for
+ * exactly this case: their assistant books orders with `send_to_kitchen:
+ * false` so payment can be chased first, leaving no ticket for the stage
+ * endpoint to move. The counter's Kitchen button is the trigger that endpoint
+ * exists for.
+ */
+describe('CloveService — the counter handing an order to Cloove’s kitchen', () => {
+  const integration = {
+    id: 'int-1', businessId: 'biz-1', storeId: 'store-1',
+    apiKey: 'sk_live', baseUrl: 'https://api.clooveai.com', isEnabled: true,
+  };
+
+  const build = () => {
+    const integrationRepo = mockRepo([integration] as never[]);
+    const client = {
+      updateKitchenStatus: jest.fn(async () => undefined),
+      updateOrderStatus: jest.fn(async () => undefined),
+      sendOrderToKitchen: jest.fn(async () => ({
+        kitchenTicketId: 'tkt-1',
+        kitchenTicketStatus: 'queued',
+        notification: { status: 'sent' },
+      })),
+      getOrder: jest.fn(async () => null as Record<string, unknown> | null),
+    };
+    const service = new CloveService(
+      integrationRepo as never, mockRepo([]) as never, mockRepo([]) as never,
+      mockRepo([]) as never, client as never, mockRepo([]) as never,
+    );
+    jest.spyOn(service, 'findWithSecret').mockResolvedValue(integration as never);
+    return { service, client };
+  };
+  const send = (service: CloveService, toStatus = 'send_to_kitchen') =>
+    service.pushStatus({ storeId: 'store-1', externalReference: 'CLOVE-ord-1', toStatus });
+
+  it('creates the ticket through Cloove’s own Send to Kitchen', async () => {
+    const { service, client } = build();
+
+    const res = await send(service);
+
+    expect(client.sendOrderToKitchen).toHaveBeenCalledWith(
+      expect.anything(), 'ord-1', expect.any(String),
+    );
+    expect(res.pushed).toBe(true);
+  });
+
+  it('does not also push a stage — the new ticket is already queued', async () => {
+    const { service, client } = build();
+
+    await send(service);
+
+    expect(client.updateKitchenStatus).not.toHaveBeenCalled();
+  });
+
+  it('falls back to moving the stage when the order already has a ticket', async () => {
+    const { service, client } = build();
+    client.sendOrderToKitchen.mockRejectedValue(
+      new CloveApiError('This order has already been sent to the kitchen.', 409) as never,
+    );
+
+    const res = await send(service);
+
+    expect(res.pushed).toBe(true);
+    expect(client.updateKitchenStatus).toHaveBeenCalledWith(
+      expect.anything(), 'ord-1', 'queued', expect.any(String),
+    );
+  });
+
+  it('only hands over at the Kitchen press — later stages just move the ticket', async () => {
+    const { service, client } = build();
+
+    await send(service, 'preparing');
+
+    expect(client.sendOrderToKitchen).not.toHaveBeenCalled();
+    expect(client.updateKitchenStatus).toHaveBeenCalledWith(
+      expect.anything(), 'ord-1', 'preparing', expect.any(String),
+    );
+  });
+
+  it('records a refusal rather than freezing the counter when Cloove will not take it', async () => {
+    const { service, client } = build();
+    client.sendOrderToKitchen.mockRejectedValue(
+      new CloveApiError('Order not found', 404) as never,
+    );
+
+    const res = await send(service);
+
+    expect(res.pushed).toBe(false);
+    expect(res.refusal).toMatch(/does not have this order/i);
+  });
+
+  it('still blocks when Cloove cannot be reached at all', async () => {
+    const { service, client } = build();
+    client.sendOrderToKitchen.mockRejectedValue(
+      new CloveApiError('Could not reach Cloove: fetch failed', 502) as never,
+    );
+
+    await expect(send(service)).rejects.toThrow(/Could not reach Cloove/);
   });
 });
