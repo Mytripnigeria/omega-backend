@@ -647,3 +647,77 @@ describe('CloveService.pushStatus', () => {
     expect(client.updateKitchenStatus).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The merchant accumulated three Cloove channels on one store — two of them
+ * pointing nowhere useful — and the hub had no way to clear them out. The
+ * endpoint existed all along; these pin down what removing one actually does,
+ * because the answer is what the merchant is told in the confirm dialog.
+ */
+describe('CloveService.removeConfig', () => {
+  const integration = {
+    id: 'int-1',
+    businessId: 'biz-1',
+    storeId: 'store-1',
+    label: 'ZERO TEST',
+    apiKey: 'whsec_notakey',
+  };
+
+  const build = () => {
+    const integrationRepo = mockRepo([integration as never]);
+    const menuMapRepo = mockRepo([
+      { id: 'map-1', integrationId: 'int-1', productId: 'p-1', cloveProductId: 'c-1' },
+      { id: 'map-2', integrationId: 'int-other', productId: 'p-2', cloveProductId: 'c-2' },
+    ] as never[]);
+    const service = new CloveService(
+      integrationRepo as never,
+      menuMapRepo as never,
+      mockRepo([]) as never,
+      mockRepo([]) as never,
+      { } as never,
+      mockRepo([]) as never,
+    );
+    jest.spyOn(service, 'findWithSecret').mockResolvedValue(integration as never);
+    return { service, integrationRepo, menuMapRepo };
+  };
+
+  it('removes the channel and forgets its product links', async () => {
+    const { service, integrationRepo, menuMapRepo } = build();
+
+    await service.removeConfig('biz-1', 'store-1', 'int-1');
+
+    expect(menuMapRepo.delete).toHaveBeenCalledWith({ integrationId: 'int-1' });
+    expect(integrationRepo.delete).toHaveBeenCalledWith({ id: 'int-1' });
+  });
+
+  it("refuses a channel that belongs to someone else's store", async () => {
+    const { service, integrationRepo } = build();
+
+    await expect(service.removeConfig('biz-2', 'store-1', 'int-1')).rejects.toThrow(
+      /not found on this store/i,
+    );
+    expect(integrationRepo.delete).not.toHaveBeenCalled();
+  });
+
+  it('leaves a counter able to work its existing orders afterwards', async () => {
+    // With the channel gone there is nothing to keep in step, so a status
+    // change must not throw — the orders on the counter still have to move.
+    const integrationRepo = mockRepo([]);
+    const service = new CloveService(
+      integrationRepo as never,
+      mockRepo([]) as never,
+      mockRepo([]) as never,
+      mockRepo([]) as never,
+      { updateKitchenStatus: jest.fn() } as never,
+      mockRepo([]) as never,
+    );
+
+    const res = await service.pushStatus({
+      storeId: 'store-1',
+      externalReference: 'CLOVE-ord-1',
+      toStatus: 'ready',
+    });
+
+    expect(res.pushed).toBe(false);
+  });
+});
