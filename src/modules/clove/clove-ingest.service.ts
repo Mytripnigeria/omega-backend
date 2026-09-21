@@ -180,6 +180,71 @@ export class CloveIngestService implements OnModuleInit {
     return paid >= total;
   }
 
+  /**
+   * Whether this is a delivery, where it goes, and what the customer paid to
+   * have it brought — none of which Cloove has a field for.
+   *
+   * Their assistant records a delivery as `serviceMode: null` with the address
+   * and the fee written into `notes`:
+   *
+   *     Delivery address: Behind customary court, the first tarred street…
+   *     Discount code: NEW10
+   *     Delivery fee: ₦1,000
+   *
+   * and then leaves the fee OUT of the line items while still charging it:
+   * `totalAmount` (1400) − lines (400) + `discountAmount` (0) is the fee. That
+   * held for all 30 of the merchant's recent orders, delivery and not, which
+   * is why the fee is taken from the money rather than parsed out of the note
+   * — the note is only the fallback when a payload carries no totals.
+   *
+   * Without this an order for delivery arrived on the counter as a dine-in
+   * (so it never reached the Delivery board) and ₦1,000 of what the customer
+   * paid was simply missing from the order.
+   */
+  static deliveryOf(order: CloveOrder): {
+    isDelivery: boolean;
+    address: string | null;
+    fee: number;
+  } {
+    const notes = order.notes ?? '';
+    const address = /delivery address:\s*(.+)/i.exec(notes)?.[1]?.trim() || null;
+    const noteFee = /delivery fee:\s*[₦n]?\s*([\d,]+(?:\.\d+)?)/i.exec(notes)?.[1];
+
+    const lines = (order.items ?? []).reduce(
+      (sum, item) => sum + Number(item.totalPrice ?? 0),
+      0,
+    );
+    const subtotal = Number(order.subtotalAmount ?? NaN);
+    const base = Number.isFinite(subtotal) && subtotal > 0 ? subtotal : lines;
+    const total = Number(order.totalAmount ?? NaN);
+    const discount = Number(order.discountAmount ?? 0) || 0;
+
+    // Anything Cloove charges on top of the lines that is NOT delivery has to
+    // come out of the gap first, or a service charge would be booked as a
+    // delivery fee (theirs read 0 today, but the fields exist).
+    const otherCharges =
+      (Number(order.serviceChargeAmount ?? 0) || 0) +
+      (order.charges ?? []).reduce((sum, c) => sum + (Number(c?.amount ?? 0) || 0), 0);
+
+    let fee = Number.isFinite(total) ? total - base + discount - otherCharges : NaN;
+    if (!Number.isFinite(fee) || fee <= 0) {
+      fee = noteFee ? Number(noteFee.replace(/,/g, '')) : 0;
+    }
+    if (!Number.isFinite(fee) || fee < 0) fee = 0;
+
+    // A stated service mode is Cloove telling us outright; only when it says
+    // nothing do the note and the fee decide.
+    const mode = (order.serviceMode ?? '').trim().toLowerCase();
+    const isDelivery =
+      mode === 'delivery'
+        ? true
+        : mode === 'dine_in' || mode === 'takeaway' || mode === 'room_service'
+          ? false
+          : fee > 0 || !!address || /delivery fee:/i.test(notes);
+
+    return { isDelivery, address, fee: isDelivery ? fee : 0 };
+  }
+
   /** How an unpaid order is reported back to the merchant. */
   private static unpaidReason(order: CloveOrder): string {
     const status = (order.paymentStatus ?? '').trim().toLowerCase();
@@ -519,6 +584,7 @@ export class CloveIngestService implements OnModuleInit {
       );
     }
 
+    const delivery = CloveIngestService.deliveryOf(cloveOrder);
     const cloveCustomer = cloveOrder.customer;
     const customerName = cloveCustomer?.name?.trim() || 'Cloove customer';
     const customerPhone =
@@ -552,10 +618,29 @@ export class CloveIngestService implements OnModuleInit {
         customerName,
         customerPhone,
         notes: this.buildNote(cloveOrder),
+        isDelivery: delivery.isDelivery,
+        ...(delivery.address ? { deliveryAddress: { line1: delivery.address } } : {}),
+        // Cloove prices the order; a discount it applied has to come across or
+        // our total would be the undiscounted one.
+        discountAmount: Number(cloveOrder.discountAmount ?? 0) || 0,
         accept: integration.autoAccept || undefined,
         items: lines,
       },
     );
+
+    // Cloove charges the delivery fee without putting it in the items, so the
+    // order it created would otherwise be short by exactly that fee: ₦400 on
+    // the counter for an order that collected ₦1,400. The fee is stamped on
+    // the row rather than passed through create(), which deliberately prices
+    // delivery from the store's own regions and must stay that way.
+    const total = Number(created.total) + delivery.fee;
+    const cloveTotal = Number(cloveOrder.totalAmount ?? NaN);
+    if (Number.isFinite(cloveTotal) && Math.abs(cloveTotal - total) > 0.01) {
+      this.logger.warn(
+        `Cloove order ${cloveOrder.shortCode ?? cloveOrder.id}: Cloove says ` +
+          `${cloveTotal} but the order totals ${total} here — registered at ${total}`,
+      );
+    }
 
     // The client's spec: a marketplace order is registered on the workstation
     // as 'initiated' with payment 'paid' — Cloove has already taken the money,
@@ -564,15 +649,17 @@ export class CloveIngestService implements OnModuleInit {
       { id: created.id },
       {
         externalReference: reference,
+        ...(delivery.fee > 0 ? { deliveryFee: delivery.fee, total } : {}),
         paymentStatus: 'paid',
-        paidAmount: Number(created.total),
+        paidAmount: total,
         paidAt: new Date(),
       },
     );
 
     this.logger.log(
       `Cloove order ${cloveOrder.id} ingested as #${created.orderNumber} ` +
-        `(store ${integration.storeId})`,
+        `(store ${integration.storeId})` +
+        (delivery.isDelivery ? ` — delivery, fee ${delivery.fee}` : ''),
     );
     return {
       handled: true,
@@ -580,6 +667,7 @@ export class CloveIngestService implements OnModuleInit {
       orderId: created.id,
       orderNumber: created.orderNumber,
       items: lines.length,
+      isDelivery: delivery.isDelivery,
     };
   }
 

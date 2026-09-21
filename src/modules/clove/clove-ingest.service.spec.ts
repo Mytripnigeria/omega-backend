@@ -187,8 +187,16 @@ describe('CloveIngestService — orders coming in', () => {
     const orders = {
       // The real OrdersService persists the row; the ingest then stamps the
       // external reference onto it, which is what makes a re-delivery a duplicate.
-      create: jest.fn(async () => {
-        const row = { id: `order-${seq}`, orderNumber: seq, total: 400 };
+      create: jest.fn(async (_actor: unknown, dto: Record<string, unknown>) => {
+        const lines = (dto.items as Array<{ unitPrice: number; quantity: number }>) ?? [];
+        const subtotal = lines.reduce((s, l) => s + Number(l.unitPrice) * l.quantity, 0);
+        const row = {
+          id: `order-${seq}`,
+          orderNumber: seq,
+          // Mirrors the real create(): lines less any discount Cloove applied,
+          // with delivery priced separately (and stamped by the ingest).
+          total: subtotal - Number(dto.discountAmount ?? 0),
+        };
         seq += 1;
         orderRepo.rows.push(row);
         return row;
@@ -208,7 +216,7 @@ describe('CloveIngestService — orders coming in', () => {
       orders as never,
       customers as never,
     );
-    return { service, client, orders, clove };
+    return { service, client, orders, clove, orderRepo };
   };
 
   describe('webhook', () => {
@@ -477,6 +485,110 @@ describe('CloveIngestService — orders coming in', () => {
       await service.simulateIncomingOrder(integration as never);
 
       expect(orders.create).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * Client, round 12: "when an order comes for an order that requires
+   * delivery, it still shows as dining … it doesn't go to the delivery
+   * section". Cloove has no delivery service mode: the assistant leaves
+   * `serviceMode` null and writes the address and the fee into the notes,
+   * while charging the fee outside the line items. Every shape below is taken
+   * from the merchant's own recent orders.
+   */
+  describe('delivery orders', () => {
+    const deliveryNote = 'Delivery address: Behind customary court, the first tarred street\nDiscount code: NEW10\nDelivery fee: ₦1,000';
+
+    it('reads a delivery out of the notes and the money', () => {
+      const d = CloveIngestService.deliveryOf(cloveOrder({
+        serviceMode: null,
+        notes: deliveryNote,
+        subtotalAmount: 3800,
+        discountAmount: 760,
+        totalAmount: 4040,
+        items: [{ id: 'l', productId: 'p', variantId: null, productName: 'Jollof', variantName: null, quantity: 1, unitPrice: 3800, totalPrice: 3800 }],
+      }) as never);
+
+      expect(d.isDelivery).toBe(true);
+      expect(d.fee).toBe(1000);
+      expect(d.address).toBe('Behind customary court, the first tarred street');
+    });
+
+    it('leaves a takeaway and a dine-in alone', () => {
+      const takeaway = CloveIngestService.deliveryOf(cloveOrder({
+        serviceMode: 'takeaway', notes: 'Discount code: NEW10',
+        subtotalAmount: 3000, discountAmount: 600, totalAmount: 2400,
+      }) as never);
+      const dineIn = CloveIngestService.deliveryOf(cloveOrder({
+        serviceMode: 'dine_in', notes: 'Location: High level',
+        subtotalAmount: 700, discountAmount: 0, totalAmount: 700,
+      }) as never);
+
+      expect(takeaway).toMatchObject({ isDelivery: false, fee: 0 });
+      expect(dineIn).toMatchObject({ isDelivery: false, fee: 0 });
+    });
+
+    it('does not book a service charge as a delivery fee', () => {
+      const d = CloveIngestService.deliveryOf(cloveOrder({
+        serviceMode: 'dine_in', notes: null,
+        subtotalAmount: 4000, discountAmount: 0, serviceChargeAmount: 500, totalAmount: 4500,
+        items: [{ id: 'l', productId: 'p', variantId: null, productName: 'Jollof', variantName: null, quantity: 1, unitPrice: 4000, totalPrice: 4000 }],
+      }) as never);
+
+      expect(d).toMatchObject({ isDelivery: false, fee: 0 });
+    });
+
+    it('still finds the fee when a payload carries no totals', () => {
+      const d = CloveIngestService.deliveryOf({
+        id: 'x', shortCode: null, status: 'completed', paymentStatus: 'paid',
+        notes: 'Delivery fee: ₦1,500',
+      } as never);
+
+      expect(d).toMatchObject({ isDelivery: true, fee: 1500 });
+    });
+
+    it('registers the order as a delivery, with the address and the fee', async () => {
+      const { service, orders, orderRepo } = build({
+        orders: [cloveOrder({
+          serviceMode: null,
+          notes: 'Delivery address: Plot 1 uke wended high level\nDelivery fee: ₦1,000',
+          subtotalAmount: 400,
+          discountAmount: 0,
+          totalAmount: 1400,
+        })],
+      });
+
+      await service.handleWebhook(
+        { type: 'order.created', data: { entityType: 'sale', entityId: 'ord-1' } },
+        'int-1',
+      );
+
+      const dto = orders.create.mock.calls[0][1] as unknown as Record<string, any>;
+      expect(dto.isDelivery).toBe(true);
+      expect(dto.deliveryAddress).toEqual({ line1: 'Plot 1 uke wended high level' });
+      // The fee Cloove charged outside the items is stamped on the row, so the
+      // counter shows what the customer actually paid.
+      const stamped = orderRepo.update.mock.calls.at(-1)?.[1] as unknown as Record<string, any>;
+      expect(stamped.deliveryFee).toBe(1000);
+      expect(stamped.total).toBe(1400);
+      expect(stamped.paidAmount).toBe(1400);
+    });
+
+    it('does not invent a fee on a dine-in order', async () => {
+      const { service, orders, orderRepo } = build({
+        orders: [cloveOrder({ serviceMode: 'dine_in', notes: 'Location: High level' })],
+      });
+
+      await service.handleWebhook(
+        { type: 'order.created', data: { entityType: 'sale', entityId: 'ord-1' } },
+        'int-1',
+      );
+
+      const dto = orders.create.mock.calls[0][1] as unknown as Record<string, any>;
+      expect(dto.isDelivery).toBe(false);
+      const stamped = orderRepo.update.mock.calls.at(-1)?.[1] as unknown as Record<string, any>;
+      expect(stamped.deliveryFee).toBeUndefined();
+      expect(stamped.paidAmount).toBe(400);
     });
   });
 

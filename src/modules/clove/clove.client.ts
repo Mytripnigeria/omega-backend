@@ -107,9 +107,23 @@ export interface CloveOrder {
    */
   paymentStatus: string | null;
   items?: CloveOrderItem[] | null;
+  /** What the customer actually owes: lines − discount + delivery fee. */
   totalAmount?: number | string | null;
+  /** The line total before discounts; equals the sum of the item lines. */
+  subtotalAmount?: number | string | null;
+  discountAmount?: number | string | null;
+  /** A restaurant service charge — not delivery, and not ours to re-book. */
+  serviceChargeAmount?: number | string | null;
+  /** Extra order-level charges, when Cloove itemises them. */
+  charges?: Array<{ name?: string | null; amount?: number | string | null }> | null;
   amountPaid?: number | string | null;
   remainingAmount?: number | string | null;
+  /**
+   * `dine_in` | `takeaway` | `room_service`, and **null on a delivery** —
+   * Cloove's assistant has no delivery value, it records the address and the
+   * fee in `notes` instead. See CloveIngestService.deliveryOf.
+   */
+  serviceMode?: string | null;
   /**
    * The order's kitchen ticket. Null when the order was never routed to the
    * kitchen on Cloove (created without `send_to_kitchen`), in which case
