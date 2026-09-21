@@ -558,10 +558,13 @@ describe('CloveService.pushStatus', () => {
     expect(res.refusal).toMatch(/cannot be cancelled/i);
   });
 
-  it('reports the real refusal, not a stray channel whose key is wrong', async () => {
-    // The merchant's store carries a channel saved with a webhook secret in
-    // place of the API key; it answers 401 to everything. That 401 must not
-    // be what gets recorded — nor may it turn a refusal into a block.
+  /**
+   * Found on production: the merchant's store carries a third channel saved
+   * with a webhook secret in place of the API key. Its 401 was enough to turn
+   * "Cloove has no kitchen ticket for this order" into a hard block, and the
+   * counter had the same dead buttons all over again.
+   */
+  it('a channel that cannot authenticate does not get a say in the verdict', async () => {
     const broken = { ...integration, id: 'int-broken' };
     const { service, client } = build({ channels: [broken, integration] });
     client.updateKitchenStatus
@@ -570,12 +573,43 @@ describe('CloveService.pushStatus', () => {
         new CloveApiError('This order has no associated kitchen ticket', 404) as never,
       );
 
-    // One channel could not be asked at all, so this is not a clean refusal:
-    // the safe answer is to stop, and the message must name the real problem.
-    const err = await push(service, 'ready').catch((e: Error) => e);
+    const res = await push(service, 'ready');
 
-    expect((err as Error).message).toMatch(/kitchen ticket/);
-    expect((err as Error).message).not.toMatch(/Invalid API key/);
+    expect(res.pushed).toBe(false);
+    expect(res.refusal).toMatch(/no kitchen ticket/i);
+  });
+
+  it('skips a channel holding a webhook secret instead of an API key', async () => {
+    const webhookSecret = { ...integration, id: 'int-whsec', apiKey: 'whsec_abc123' };
+    const { service, client } = build({ channels: [webhookSecret, integration] });
+
+    await push(service, 'ready');
+
+    // Asked once — the real channel — not twice.
+    expect(client.updateKitchenStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('still blocks when no channel could be asked at all', async () => {
+    const { service, client } = build();
+    client.updateKitchenStatus.mockRejectedValue(
+      new CloveApiError('Invalid API key', 401) as never,
+    );
+
+    await expect(push(service, 'ready')).rejects.toThrow(/Invalid API key/);
+  });
+
+  it('clears an order Cloove no longer holds off the counter', async () => {
+    const { service, client } = build();
+    // Cloove's exact wording when the order has been deleted there, seen on
+    // production while trying to cancel a test order: "Sale not found."
+    client.updateOrderStatus.mockRejectedValue(
+      new CloveApiError('Sale not found.', 404) as never,
+    );
+
+    const res = await push(service, 'cancelled', 'Removing');
+
+    expect(res.pushed).toBe(false);
+    expect(res.refusal).toMatch(/does not have this order/i);
   });
 
   it('does not trap an order Cloove has never heard of', async () => {

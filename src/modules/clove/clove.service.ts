@@ -963,6 +963,16 @@ export class CloveService {
     for (const row of rows) {
       const integration = await this.findWithSecret({ id: row.id });
       if (!integration) continue;
+      // A webhook secret is not an API key. One merchant pasted theirs into
+      // the key field, and that channel answers 401 to everything — there is
+      // nothing to gain by asking it, and a great deal to lose (see below).
+      if (integration.apiKey?.startsWith('whsec_')) {
+        this.logger.warn(
+          `Cloove channel ${integration.label ?? integration.id} holds a webhook ` +
+            'secret, not an API key — skipped. Remove it or paste the clv_live_sk_… key.',
+        );
+        continue;
+      }
       try {
         if (target.kind === 'kitchen') {
           await this.client.updateKitchenStatus(
@@ -1006,8 +1016,19 @@ export class CloveService {
     // silently ignored, so those orders can NEVER take a prep stage; and an
     // order paid by automated bank transfer cannot be cancelled through the
     // API at all. Blocking on either would leave staff with dead buttons.
-    if (errors.length > 0 && errors.every((e) => CloveService.isRefusal(e))) {
-      const refusal = CloveService.refusalText(bestError ?? lastError);
+    // A channel that cannot authenticate never answered about this order at
+    // all, so it does not get a say in the verdict. Live proof that this
+    // matters: the merchant's store carries a third channel saved with a
+    // webhook secret in place of the API key, and its 401 was enough to turn
+    // "Cloove has no kitchen ticket for this order" into a hard block —
+    // leaving the counter with the same dead buttons the refusal handling was
+    // written to prevent. If NO channel could be asked, that is a key problem
+    // the merchant can fix, and it still blocks.
+    const answered = errors.filter((e) => !CloveService.isAuthFailure(e));
+    if (answered.length > 0 && answered.every((e) => CloveService.isRefusal(e))) {
+      const refusal = CloveService.refusalText(
+        bestError !== undefined && !CloveService.isAuthFailure(bestError) ? bestError : answered[0],
+      );
       this.logger.warn(
         `Cloove refused ${params.toStatus} for order ${cloveOrderId} (${refusal}) — ` +
           'applied here only',
