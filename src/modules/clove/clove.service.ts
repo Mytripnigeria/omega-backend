@@ -1069,24 +1069,61 @@ export class CloveService {
     isHandover: boolean,
   ): Promise<void> {
     if (isHandover) {
-      try {
-        const handed = await this.client.sendOrderToKitchen(creds, cloveOrderId, randomUUID());
-        this.logger.log(
-          `Cloove kitchen ticket ${handed.kitchenTicketId ?? '(unknown)'} created for order ` +
-            `${cloveOrderId} · customer notification: ${handed.notification?.status ?? 'n/a'}` +
-            (handed.notification?.reason ? ` (${handed.notification.reason})` : ''),
-        );
-        // The ticket is created at `queued`, which is exactly the stage a
-        // hand-over means — nothing further to send.
-        if (status === 'queued') return;
-      } catch (err) {
-        if (!CloveService.isAlreadySentToKitchen(err)) throw err;
-        this.logger.log(
-          `Cloove order ${cloveOrderId} was already sent to its kitchen — moving the stage instead`,
-        );
-      }
+      // Pressing Kitchen IS the hand-over, so go straight at it rather than
+      // spending a call learning there is no ticket.
+      const created = await this.createKitchenTicket(creds, cloveOrderId);
+      // A ticket is born `queued`, which is what a hand-over means.
+      if (created && status === 'queued') return;
+      await this.client.updateKitchenStatus(creds, cloveOrderId, status, randomUUID());
+      return;
     }
-    await this.client.updateKitchenStatus(creds, cloveOrderId, status, randomUUID());
+
+    try {
+      await this.client.updateKitchenStatus(creds, cloveOrderId, status, randomUUID());
+    } catch (err) {
+      if (!CloveService.isMissingKitchenTicket(err)) throw err;
+      // Quick Bill takes an order straight to `ready` without passing through
+      // the kitchen, and the merchant's flow still expects Cloove to follow.
+      // Same for a cook who reaches the board without the counter's hand-over.
+      // The ticket has to exist before a stage can be set, so make one.
+      this.logger.log(
+        `Cloove order ${cloveOrderId} has no kitchen ticket for stage ${status} — creating one`,
+      );
+      await this.createKitchenTicket(creds, cloveOrderId);
+      await this.client.updateKitchenStatus(creds, cloveOrderId, status, randomUUID());
+    }
+  }
+
+  /**
+   * Creates the order's kitchen ticket on Cloove. Returns false when Cloove
+   * says it already has one (409) — not a failure, just nothing to do.
+   */
+  private async createKitchenTicket(
+    creds: CloveCredentials,
+    cloveOrderId: string,
+  ): Promise<boolean> {
+    try {
+      const handed = await this.client.sendOrderToKitchen(creds, cloveOrderId, randomUUID());
+      this.logger.log(
+        `Cloove kitchen ticket ${handed.kitchenTicketId ?? '(unknown)'} created for order ` +
+          `${cloveOrderId} · customer notification: ${handed.notification?.status ?? 'n/a'}` +
+          (handed.notification?.reason ? ` (${handed.notification.reason})` : ''),
+      );
+      return true;
+    } catch (err) {
+      if (!CloveService.isAlreadySentToKitchen(err)) throw err;
+      this.logger.log(`Cloove order ${cloveOrderId} already has a kitchen ticket`);
+      return false;
+    }
+  }
+
+  /** Cloove's 404 when the order exists but was never routed to its kitchen. */
+  private static isMissingKitchenTicket(err: unknown): boolean {
+    return (
+      err instanceof CloveApiError &&
+      err.upstreamStatus === 404 &&
+      /kitchen ticket/i.test(err.message)
+    );
   }
 
   /** Cloove's 409 when an order already has a kitchen ticket. */

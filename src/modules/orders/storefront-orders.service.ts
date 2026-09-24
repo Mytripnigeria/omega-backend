@@ -28,6 +28,7 @@ import {
 import { CustomersService } from '../customers/customers.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { CouponsService } from '../coupons/coupons.service';
+import { AutomaticDiscountsService } from '../coupons/automatic-discounts.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { BusinessService } from '../business/business.service';
 import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.service';
@@ -116,6 +117,7 @@ export class StorefrontOrdersService {
     private readonly dataSource: DataSource,
     private readonly customersService: CustomersService,
     private readonly couponsService: CouponsService,
+    private readonly automaticDiscounts: AutomaticDiscountsService,
     private readonly activityLog: ActivityLogService,
     private readonly paystack: PaystackService,
     private readonly integrations: IntegrationsService,
@@ -242,7 +244,7 @@ export class StorefrontOrdersService {
     }
 
     // Resolve every line item against the menu — recompute unit price + name.
-    const lines = await this.resolveLineItems(dto.storeId, dto.items);
+    const lines = await this.resolveLineItems(dto.storeId, dto.items, user.businessId);
     const subtotal = lines.reduce((s, l) => s + l.lineTotal, 0);
 
     // Pricing config from settings.
@@ -927,7 +929,14 @@ export class StorefrontOrdersService {
   private async resolveLineItems(
     storeId: string,
     items: StorefrontCreateOrderDto['items'],
+    businessId?: string,
   ): Promise<ResolvedLine[]> {
+    // The same automatic discounts the storefront listing showed. Priced here
+    // rather than trusted from the client, so the amount charged is the amount
+    // advertised — and so a tampered payload cannot invent a discount.
+    const running = businessId
+      ? await this.automaticDiscounts.activeFor(businessId)
+      : [];
     const productIds = Array.from(
       new Set(items.map((i) => i.productId).filter((id): id is string => !!id)),
     );
@@ -1004,6 +1013,16 @@ export class StorefrontOrdersService {
           stock = chosenVariation.stock ?? stock;
           displayName = `${p.name} (${chosenVariation.name})`;
         }
+        // Applied to the item price before add-ons, exactly as the listing
+        // shows it: the promotion is on the dish, not on the extras.
+        const automatic = running.length
+          ? AutomaticDiscountsService.bestFor(
+              running,
+              { id: p.id, categoryId: p.categoryId },
+              unitPrice,
+            )
+          : null;
+        if (automatic) unitPrice = automatic.price;
         // Add-ons are priced server-side from the product's addon groups so
         // the persisted total (and the Paystack charge) can't be tampered
         // with — the client snapshot only supplies which add-ons were chosen.

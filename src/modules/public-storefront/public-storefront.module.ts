@@ -8,6 +8,7 @@ import { OrderItemEntity } from '../orders/entities/order-item.entity';
 import { DeliveryRegionEntity } from '../delivery-regions/entities/delivery-region.entity';
 import { OrderEntity } from '../orders/entities/order.entity';
 import { PublicMenuController } from './public-menu.controller';
+import { CouponsModule } from '../coupons/coupons.module';
 
 @Module({
   imports: [
@@ -20,6 +21,8 @@ import { PublicMenuController } from './public-menu.controller';
       OrderEntity,
       DeliveryRegionEntity,
     ]),
+    // Storefront listings carry any automatic discount the merchant is running.
+    CouponsModule,
   ],
   controllers: [PublicMenuController],
 })

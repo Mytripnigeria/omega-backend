@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import {
   CouponEntity,
+  CouponMethod,
   CouponRedemptionEntity,
   CouponType,
 } from './entities/coupon.entity';
@@ -146,6 +147,14 @@ export class CouponsService {
     });
     if (!coupon || !coupon.isActive) {
       return { valid: false, reason: 'Invalid coupon code' };
+    }
+    // An automatic discount is already in the prices the customer is looking
+    // at. Letting its code be typed as well would take it off twice.
+    if (coupon.method === CouponMethod.AUTOMATIC) {
+      return {
+        valid: false,
+        reason: 'This discount is already applied to the prices shown',
+      };
     }
     const now = new Date();
     if (coupon.startsAt && coupon.startsAt > now) {

@@ -19,6 +19,7 @@ import { StoreResponseDto } from '../store/dto/store-response.dto';
 import { OrderItemEntity } from '../orders/entities/order-item.entity';
 import { DeliveryRegionEntity } from '../delivery-regions/entities/delivery-region.entity';
 import { DeliveryRegionResponseDto } from '../delivery-regions/dto/delivery-region.dto';
+import { AutomaticDiscountsService } from '../coupons/automatic-discounts.service';
 
 @ApiTags('public-storefront')
 @Controller('public/storefront')
@@ -36,7 +37,37 @@ export class PublicMenuController {
     private readonly orderItemRepo: Repository<OrderItemEntity>,
     @InjectRepository(DeliveryRegionEntity)
     private readonly deliveryRegionRepo: Repository<DeliveryRegionEntity>,
+    private readonly automaticDiscounts: AutomaticDiscountsService,
   ) {}
+
+  /**
+   * Prices a storefront listing with any automatic discount the merchant has
+   * running. The shelf price stays on `sellingPrice`; the discount rides
+   * alongside it so the page can show the old price struck through next to the
+   * new one, the way every shop online does it.
+   */
+  private async withDiscounts(
+    businessId: string,
+    products: ProductEntity[],
+  ): Promise<ProductResponseDto[]> {
+    const dtos = products.map(ProductResponseDto.from);
+    const running = await this.automaticDiscounts.activeFor(businessId);
+    if (running.length === 0) return dtos;
+    for (const [i, dto] of dtos.entries()) {
+      const product = products[i];
+      const on = { id: product.id, categoryId: product.categoryId };
+      const base = Number(product.sellingPrice ?? product.price ?? 0);
+      dto.discount = AutomaticDiscountsService.bestFor(running, on, base) ?? null;
+      // A size replaces the base price, so it needs its own figure — otherwise
+      // picking "Large" would quietly show the undiscounted price.
+      for (const variation of dto.variations ?? []) {
+        const vBase = Number(variation.sellingPrice ?? variation.price ?? 0);
+        variation.discount =
+          AutomaticDiscountsService.bestFor(running, on, vBase) ?? null;
+      }
+    }
+    return dtos;
+  }
 
   @ApiOperation({
     summary: 'Delivery regions for a store',
@@ -233,7 +264,7 @@ export class PublicMenuController {
     if (search) qb.andWhere('p.name ILIKE :q', { q: `%${search}%` });
 
     const products = await qb.getMany();
-    return products.map(ProductResponseDto.from);
+    return this.withDiscounts(businessId, products);
   }
 
   @ApiOperation({ summary: 'Get a single product (public)' })
@@ -271,7 +302,7 @@ export class PublicMenuController {
       where: { id: product.storeId, businessId },
     });
     if (!store) throw new BadRequestException('Product not available');
-    return ProductResponseDto.from(product);
+    return (await this.withDiscounts(businessId, [product]))[0];
   }
 
   @ApiOperation({

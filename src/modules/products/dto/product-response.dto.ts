@@ -34,6 +34,22 @@ export class ProductVariationResponseDto {
   @Expose()
   stock: number;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Storefront reads only: the automatic discount running on this size, so ' +
+      'picking a size shows the same struck-through price as the listing.',
+  })
+  @Expose()
+  discount?: {
+    originalPrice: number;
+    price: number;
+    savings: number;
+    percentOff: number | null;
+    couponId: string;
+    label: string | null;
+  } | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   @Expose()
   @Type(() => Date)
@@ -151,6 +167,32 @@ export class ProductResponseDto {
   @ApiProperty({ example: 4500.0 })
   @Expose()
   sellingPrice: number;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Set only on storefront reads, and only when an automatic discount is ' +
+      'running on this product. `sellingPrice` stays the shelf price; this is ' +
+      'what the customer actually pays, and both are shown — the old price ' +
+      'struck through beside the new one.',
+    example: {
+      originalPrice: 4500,
+      price: 3150,
+      savings: 1350,
+      percentOff: 30,
+      couponId: 'e2b1…',
+      label: 'Launch week',
+    },
+  })
+  @Expose()
+  discount?: {
+    originalPrice: number;
+    price: number;
+    savings: number;
+    percentOff: number | null;
+    couponId: string;
+    label: string | null;
+  } | null;
 
   @ApiPropertyOptional({ example: 'JR-LG', nullable: true })
   @Expose()

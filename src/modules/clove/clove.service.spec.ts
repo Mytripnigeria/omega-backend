@@ -580,14 +580,15 @@ describe('CloveService.pushStatus', () => {
     const { service, client } = build({ channels: [broken, integration] });
     client.updateKitchenStatus
       .mockRejectedValueOnce(new CloveApiError('Invalid API key', 401) as never)
-      .mockRejectedValueOnce(
-        new CloveApiError('This order has no associated kitchen ticket', 404) as never,
-      );
+      .mockRejectedValueOnce(new CloveApiError('Order not found', 404) as never);
+    client.sendOrderToKitchen.mockRejectedValue(
+      new CloveApiError('Order not found', 404) as never,
+    );
 
     const res = await push(service, 'ready');
 
     expect(res.pushed).toBe(false);
-    expect(res.refusal).toMatch(/no kitchen ticket/i);
+    expect(res.refusal).toMatch(/does not have this order/i);
   });
 
   it('skips a channel holding a webhook secret instead of an API key', async () => {
@@ -626,17 +627,17 @@ describe('CloveService.pushStatus', () => {
   it('records the answer from the channel that actually holds the order', async () => {
     const second = { ...integration, id: 'int-2' };
     const { service, client } = build({ channels: [integration, second] });
-    client.updateKitchenStatus
+    client.updateOrderStatus
       // The wrong workspace simply does not have it…
       .mockRejectedValueOnce(new CloveApiError('Order not found', 404) as never)
       // …the right one explains what is actually wrong.
       .mockRejectedValueOnce(
-        new CloveApiError('This order has no associated kitchen ticket', 404) as never,
+        new CloveApiError('Completed automated bank transfer orders cannot be cancelled', 422) as never,
       );
 
-    const res = await push(service, 'ready');
+    const res = await push(service, 'cancelled', 'Out of stock');
 
-    expect(res.refusal).toMatch(/no kitchen ticket/i);
+    expect(res.refusal).toMatch(/cannot be cancelled/i);
     expect(res.refusal).not.toMatch(/does not have this order/i);
   });
 
@@ -818,7 +819,7 @@ describe('CloveService — the counter handing an order to Cloove’s kitchen', 
     );
   });
 
-  it('only hands over at the Kitchen press — later stages just move the ticket', async () => {
+  it('moves the ticket directly when there already is one', async () => {
     const { service, client } = build();
 
     await send(service, 'preparing');
@@ -827,6 +828,45 @@ describe('CloveService — the counter handing an order to Cloove’s kitchen', 
     expect(client.updateKitchenStatus).toHaveBeenCalledWith(
       expect.anything(), 'ord-1', 'preparing', expect.any(String),
     );
+  });
+
+  /**
+   * Quick Bill takes an order straight to `ready` without the kitchen, and the
+   * merchant's flow still expects Cloove to follow. Their assistant's orders
+   * have no ticket, so one has to be made before a stage can be set —
+   * otherwise Quick Bill moved the counter and told Cloove nothing (seen on
+   * production, order #4244).
+   */
+  it('creates the ticket when a stage lands on an order that has none', async () => {
+    const { service, client } = build();
+    client.updateKitchenStatus.mockRejectedValueOnce(
+      new CloveApiError('This order has no associated kitchen ticket', 404) as never,
+    );
+
+    const res = await send(service, 'ready');
+
+    expect(client.sendOrderToKitchen).toHaveBeenCalledWith(
+      expect.anything(), 'ord-1', expect.any(String),
+    );
+    expect(client.updateKitchenStatus).toHaveBeenLastCalledWith(
+      expect.anything(), 'ord-1', 'ready', expect.any(String),
+    );
+    expect(res.pushed).toBe(true);
+  });
+
+  it('gives up gracefully when Cloove will not create one either', async () => {
+    const { service, client } = build();
+    client.updateKitchenStatus.mockRejectedValue(
+      new CloveApiError('This order has no associated kitchen ticket', 404) as never,
+    );
+    client.sendOrderToKitchen.mockRejectedValue(
+      new CloveApiError('Order not found', 404) as never,
+    );
+
+    const res = await send(service, 'ready');
+
+    expect(res.pushed).toBe(false);
+    expect(res.refusal).toMatch(/does not have this order/i);
   });
 
   it('records a refusal rather than freezing the counter when Cloove will not take it', async () => {

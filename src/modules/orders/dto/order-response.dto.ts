@@ -90,6 +90,17 @@ export class OrderResponseDto {
   @Expose()
   storeId: string;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Scoops - Makurdi',
+    description:
+      'Which store the order belongs to. A workstation linked to other stores ' +
+      'works several brands from one screen, and staff have to be able to tell ' +
+      'whose order they are looking at.',
+  })
+  @Expose()
+  storeName?: string | null;
+
   @ApiPropertyOptional({ format: 'uuid', nullable: true })
   @Expose()
   staffId: string | null;

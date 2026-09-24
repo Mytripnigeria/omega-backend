@@ -41,6 +41,7 @@ import { FinancialTransactionsService } from '../financial-transactions/financia
 import { TransactionMethod } from '../financial-transactions/entities/financial-transaction.entity';
 import { MerchantWalletService } from '../merchant-wallet/merchant-wallet.service';
 import { TableEntity, TableStatus } from '../tables/entities/table.entity';
+import { StoreEntity } from '../store/entities/store.entity';
 import { PushService } from '../push-notifications/push.service';
 import { ChowdeckService } from '../chowdeck/chowdeck.service';
 import { CLOVE_SEND_TO_KITCHEN, CloveService } from '../clove/clove.service';
@@ -1076,11 +1077,38 @@ export class OrdersService {
     if (filter.dateTo) qb.andWhere('o.createdAt <= :dt', { dt: endOfDayFilter(filter.dateTo) });
 
     const [data, total] = await qb.getManyAndCount();
+    await this.attachStoreNames(data);
     return paginate(data, total, page, limit, OrderResponseDto.from);
   }
 
   async findOne(actor: ActorContext, id: string): Promise<OrderResponseDto> {
-    return OrderResponseDto.from(await this.findEntity(actor, id));
+    const order = await this.findEntity(actor, id);
+    await this.attachStoreNames([order]);
+    return OrderResponseDto.from(order);
+  }
+
+  /**
+   * Names the store each order belongs to.
+   *
+   * A workstation that has been linked to other stores shows their orders
+   * alongside its own — that is the whole point of linking, so one team can
+   * run several brands from one screen. Without the name on the order there is
+   * nothing on the card to say which brand it is for.
+   *
+   * One extra query per page, keyed on the distinct stores actually present,
+   * which for a single-store workstation is one id.
+   */
+  private async attachStoreNames(orders: OrderEntity[]): Promise<void> {
+    const ids = Array.from(new Set(orders.map((o) => o.storeId).filter(Boolean)));
+    if (ids.length === 0) return;
+    const stores = await this.dataSource
+      .getRepository(StoreEntity)
+      .find({ where: { id: In(ids) }, select: { id: true, name: true } });
+    const nameById = new Map(stores.map((s) => [s.id, s.name]));
+    for (const order of orders) {
+      (order as OrderEntity & { storeName?: string | null }).storeName =
+        nameById.get(order.storeId) ?? null;
+    }
   }
 
   private async findEntity(actor: ActorContext, id: string): Promise<OrderEntity> {
