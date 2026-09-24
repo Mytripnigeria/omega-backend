@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
@@ -13,10 +14,25 @@ export enum PinLength {
   EIGHT = 8,
 }
 
+/**
+ * How one store's workstation behaves.
+ *
+ * These used to be one record per BUSINESS, which meant a merchant with three
+ * branches could not give them different PIN rules, clock-in windows,
+ * auto-accept or geofences — changing one changed them all. The merchant asked
+ * for settings "about a particular store id not general business id", so the
+ * record is now keyed by store; `businessId` stays for scoping and for listing
+ * a business's stores.
+ */
 @Entity('workstation_settings')
 export class WorkstationSettingsEntity {
-  @ApiProperty({ format: 'uuid', example: 'b1f1d2c0-1234-4f1a-8c3e-9a4f0c4e2b21' })
+  @ApiProperty({ format: 'uuid', description: 'The store these settings govern.' })
   @PrimaryColumn('uuid')
+  storeId: string;
+
+  @ApiProperty({ format: 'uuid', example: 'b1f1d2c0-1234-4f1a-8c3e-9a4f0c4e2b21' })
+  @Column({ type: 'uuid' })
+  @Index()
   businessId: string;
 
   // ---------- Authentication ----------

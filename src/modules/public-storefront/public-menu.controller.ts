@@ -141,9 +141,17 @@ export class PublicMenuController {
       'saturday',
     ] as const;
     const day = dayKeys[target.getDay()];
-    const slot = store.openingHours?.[day];
+    // A store with NO opening hours at all is unrestricted, which is exactly
+    // how order placement treats it. This used to answer "closed, no slots"
+    // for such a store, so the storefront offered no time to pick and refused
+    // to place an order the API would have accepted — while the header badge
+    // still read "Open". The two rules have to agree.
+    const slot = store.openingHours
+      ? store.openingHours[day]
+      : { open: '00:00', close: '23:59', closed: false };
 
-    // No hours configured — assume always open during business hours.
+    // A day the merchant marked closed (or left out of a configured week) is
+    // genuinely closed.
     if (!slot || slot.closed) {
       return { date: dateStr, asapAvailable: false, slots: [] };
     }
@@ -417,10 +425,15 @@ export class PublicMenuController {
       .getMany();
 
     const byId = new Map(products.map((p) => [p.id, p]));
-    return rankedIds
-      .map((id) => byId.get(id))
-      .filter((p): p is ProductEntity => !!p)
-      .map(ProductResponseDto.from);
+    // Priced like every other list: a recommendation card showing the shelf
+    // price next to a menu card showing the promotional one is the drift this
+    // whole path exists to prevent.
+    return this.withDiscounts(
+      businessId,
+      rankedIds
+        .map((id) => byId.get(id))
+        .filter((p): p is ProductEntity => !!p),
+    );
   }
 
   private async assertStore(businessId: string, storeId: string): Promise<void> {

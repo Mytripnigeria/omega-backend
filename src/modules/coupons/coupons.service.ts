@@ -240,6 +240,15 @@ export class CouponsService {
       if (!coupon || !coupon.isActive) {
         throw new BadRequestException('Invalid coupon code');
       }
+      // Same rule as validate(), enforced again on the money path: an
+      // automatic discount is already inside the line prices, so redeeming its
+      // code would take it off a second time. Checkout preflights with
+      // validate() today, but this is the call that moves money.
+      if (coupon.method === CouponMethod.AUTOMATIC) {
+        throw new BadRequestException(
+          'This discount is already applied to the prices shown',
+        );
+      }
       const now = new Date();
       if (coupon.startsAt && coupon.startsAt > now)
         throw new BadRequestException('Coupon is not yet active');

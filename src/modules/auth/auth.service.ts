@@ -34,6 +34,7 @@ import {
 } from './dto/storefront-register.dto';
 import { StorefrontGoogleAuthDto } from './dto/google-auth.dto';
 import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
+import { WorkstationGeofenceEntity } from '../workstation-settings/entities/workstation-geofence.entity';
 import { assertWithinGeofence } from '../../common/utils/geofence';
 import {
   RequestPhoneOtpDto,
@@ -100,6 +101,8 @@ export class AuthService {
     private readonly phoneOtpRepo: Repository<PhoneOtpEntity>,
     @InjectRepository(WorkstationSettingsEntity)
     private readonly workstationSettingsRepo: Repository<WorkstationSettingsEntity>,
+    @InjectRepository(WorkstationGeofenceEntity)
+    private readonly geofenceRepo: Repository<WorkstationGeofenceEntity>,
     @Inject(SmsService)
     private readonly smsService: SmsService,
     private readonly dataSource: DataSource,
@@ -373,14 +376,21 @@ export class AuthService {
     }
 
     // Geofencing: when the merchant restricts login to the work environment,
-    // require the device's coordinates to fall inside the configured radius.
+    // the device's coordinates must fall inside one of the store's places.
+    // Settings and places are both per store — a branch's rules are its own.
     const wsSettings = await this.workstationSettingsRepo.findOne({
-      where: { businessId },
+      where: { storeId: staff.storeId },
     });
+    const places = wsSettings?.geofenceEnabled
+      ? await this.geofenceRepo.find({
+          where: { storeId: staff.storeId, isActive: true },
+        })
+      : [];
     assertWithinGeofence(
       wsSettings,
       { latitude: dto.latitude, longitude: dto.longitude },
       'log in',
+      places,
     );
 
     const payload: StaffJwtPayload = {

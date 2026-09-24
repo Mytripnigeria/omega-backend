@@ -19,9 +19,18 @@ export function distanceMeters(
 
 export interface GeofenceConfig {
   geofenceEnabled: boolean;
+  /** Legacy single centre, kept for a store that has no places listed yet. */
   geofenceLatitude: number | null;
   geofenceLongitude: number | null;
   geofenceRadiusMeters: number;
+}
+
+/** One place staff may work from. A store may have several. */
+export interface GeofenceLocation {
+  label?: string;
+  latitude: number | string;
+  longitude: number | string;
+  radiusMeters?: number | null;
 }
 
 export interface Coords {
@@ -40,13 +49,30 @@ export function assertWithinGeofence(
   config: GeofenceConfig | null | undefined,
   coords: Coords | undefined,
   action = 'do this',
+  locations: GeofenceLocation[] = [],
 ): void {
   if (!config?.geofenceEnabled) return;
-  // If the merchant enabled the rule but never set a centre, fail open rather
-  // than locking everyone out of a misconfigured store.
-  if (config.geofenceLatitude == null || config.geofenceLongitude == null) {
-    return;
-  }
+
+  // A store may work from several places — a dining room and a kitchen unit
+  // down the road — and being at any of them counts. The single centre on the
+  // settings record is the legacy shape, used only while a store has no
+  // places listed.
+  const places: GeofenceLocation[] = locations.length
+    ? locations
+    : config.geofenceLatitude != null && config.geofenceLongitude != null
+      ? [
+          {
+            latitude: config.geofenceLatitude,
+            longitude: config.geofenceLongitude,
+            radiusMeters: config.geofenceRadiusMeters,
+          },
+        ]
+      : [];
+
+  // Enabled but nowhere defined: fail open rather than locking everyone out
+  // of a half-configured store.
+  if (places.length === 0) return;
+
   if (
     coords?.latitude == null ||
     coords?.longitude == null ||
@@ -57,14 +83,17 @@ export function assertWithinGeofence(
       `Location is required to ${action}. Enable location access and try again.`,
     );
   }
-  const dist = distanceMeters(
-    Number(config.geofenceLatitude),
-    Number(config.geofenceLongitude),
-    coords.latitude,
-    coords.longitude,
-  );
-  const radius = Number(config.geofenceRadiusMeters) || 100;
-  if (dist > radius) {
+
+  const inside = places.some((place) => {
+    const dist = distanceMeters(
+      Number(place.latitude),
+      Number(place.longitude),
+      coords.latitude!,
+      coords.longitude!,
+    );
+    return dist <= (Number(place.radiusMeters) || 100);
+  });
+  if (!inside) {
     throw new ForbiddenException(
       `You must be within the work environment to ${action}.`,
     );

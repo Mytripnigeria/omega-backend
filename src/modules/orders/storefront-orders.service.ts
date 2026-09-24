@@ -339,7 +339,7 @@ export class StorefrontOrdersService {
       const autoAccept =
         (
           await mgr.getRepository(WorkstationSettingsEntity).findOne({
-            where: { businessId: user.businessId },
+            where: { storeId: dto.storeId },
           })
         )?.autoAcceptOrders ?? false;
       // An order still awaiting an online charge must NOT be accepted yet, no
@@ -680,7 +680,7 @@ export class StorefrontOrdersService {
     const autoAccept =
       (
         await this.workstationSettingsRepo.findOne({
-          where: { businessId: order.businessId },
+          where: { storeId: order.storeId },
         })
       )?.autoAcceptOrders ?? false;
     if (!autoAccept) return;

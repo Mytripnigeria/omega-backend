@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ShiftEntity } from './entities/shift.entity';
 import { StaffEntity } from '../staff/entities/staff.entity';
 import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
+import { WorkstationGeofenceEntity } from '../workstation-settings/entities/workstation-geofence.entity';
 import { ShiftsService } from './shifts.service';
 import { ShiftsController } from './shifts.controller';
 import { ActivityLogModule } from '../activity-log/activity-log.module';
@@ -14,6 +15,7 @@ import { CashSessionsModule } from '../cash-sessions/cash-sessions.module';
       ShiftEntity,
       StaffEntity,
       WorkstationSettingsEntity,
+      WorkstationGeofenceEntity,
     ]),
     ActivityLogModule,
     CashSessionsModule,

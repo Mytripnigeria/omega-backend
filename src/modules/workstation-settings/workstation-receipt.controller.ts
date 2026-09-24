@@ -46,6 +46,10 @@ export class WorkstationFunctionAccessController {
   @ApiOperation({ summary: 'Per-function role access map for the workstation' })
   @Get()
   get(@Req() req: AuthedRequest) {
-    return this.service.getFunctionAccess(req.user!.businessId);
+    // Staff read their own store's map; an admin may ask for one by id.
+    const user = req.user!;
+    const storeId =
+      user.sub_type === 'staff' ? user.storeId : (req.query.storeId as string);
+    return this.service.getFunctionAccess(user.businessId, storeId ?? '');
   }
 }

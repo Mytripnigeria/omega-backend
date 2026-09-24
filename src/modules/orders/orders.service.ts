@@ -781,10 +781,14 @@ export class OrdersService {
     return (parseInt(row?.max ?? '0', 10) || 0) + 1;
   }
 
-  /** Reads the business' workstation auto-accept setting (defaults to false). */
-  async isAutoAcceptEnabled(businessId: string): Promise<boolean> {
+  /**
+   * Whether this store takes orders on automatically. Per store, not per
+   * business: a busy branch may want it on while another wants a cashier to
+   * accept each order by hand.
+   */
+  async isAutoAcceptEnabled(storeId: string): Promise<boolean> {
     const settings = await this.workstationSettingsRepo.findOne({
-      where: { businessId },
+      where: { storeId },
     });
     return settings?.autoAcceptOrders ?? false;
   }
@@ -851,7 +855,7 @@ export class OrdersService {
       throw new BadRequestException('Order requires a store context');
     }
 
-    const autoAccept = await this.isAutoAcceptEnabled(actor.businessId);
+    const autoAccept = await this.isAutoAcceptEnabled(actor.storeId);
     const statusChain = this.resolveInitialStatusChain({
       accept: dto.accept,
       quickBill: dto.quickBill,

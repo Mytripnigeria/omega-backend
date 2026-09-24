@@ -12,6 +12,7 @@ import { randomUUID } from 'crypto';
 import { ShiftEntity, ShiftStatus } from './entities/shift.entity';
 import { StaffEntity } from '../staff/entities/staff.entity';
 import { WorkstationSettingsEntity } from '../workstation-settings/entities/workstation-settings.entity';
+import { WorkstationGeofenceEntity } from '../workstation-settings/entities/workstation-geofence.entity';
 import { assertWithinGeofence } from '../../common/utils/geofence';
 import { CreateShiftDto } from './dto/create-shift.dto';
 import { UpdateShiftDto } from './dto/update-shift.dto';
@@ -36,6 +37,8 @@ export class ShiftsService implements OnModuleInit {
     private readonly staffRepo: Repository<StaffEntity>,
     @InjectRepository(WorkstationSettingsEntity)
     private readonly workstationSettingsRepo: Repository<WorkstationSettingsEntity>,
+    @InjectRepository(WorkstationGeofenceEntity)
+    private readonly geofenceRepo: Repository<WorkstationGeofenceEntity>,
     private readonly activityLog: ActivityLogService,
     private readonly cashSessions: CashSessionsService,
   ) {}
@@ -184,11 +187,17 @@ export class ShiftsService implements OnModuleInit {
       throw new BadRequestException(`Cannot clock in: shift is ${shift.status}`);
     }
 
-    // Apply the merchant's geofencing rule (Workstation Settings) on clock-in.
+    // Apply the store's geofencing rule (Workstation Settings) on clock-in —
+    // its own rule, and any of its own places.
     const wsSettings = await this.workstationSettingsRepo.findOne({
-      where: { businessId: staff.businessId },
+      where: { storeId: staff.storeId },
     });
-    assertWithinGeofence(wsSettings, coords, 'clock in');
+    const places = wsSettings?.geofenceEnabled
+      ? await this.geofenceRepo.find({
+          where: { storeId: staff.storeId, isActive: true },
+        })
+      : [];
+    assertWithinGeofence(wsSettings, coords, 'clock in', places);
 
     shift.actualClockIn = new Date();
     shift.status = ShiftStatus.IN_PROGRESS;
