@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -50,9 +51,15 @@ export class StoreLinksController {
   @Get('outgoing')
   outgoing(@Req() req: AuthedRequest) {
     const user = req.user!;
-    const storeId =
-      user.sub_type === 'staff' ? user.storeId : (req.query.storeId as string);
-    return this.service.listOutgoing(storeId!);
+    if (user.sub_type !== 'staff') {
+      // The dashboard looks after every store the merchant owns; a single
+      // store's links are still available by naming one.
+      const asked = req.query.storeId as string | undefined;
+      return asked
+        ? this.service.listOutgoing(asked)
+        : this.service.listOutgoingForBusiness(user.businessId);
+    }
+    return this.service.listOutgoing(user.storeId!);
   }
 
   @ApiOperation({
@@ -66,18 +73,30 @@ export class StoreLinksController {
   }
 
   @ApiOperation({
-    summary: 'Ask to help run another store’s orders',
+    summary: 'Link a store to one of yours',
     description:
-      'Sent from the workstation with the target store id. It stays pending ' +
-      "until that store's business approves it.",
+      'From a workstation, the signed-in store asks to help run the target ' +
+      "store's orders and it stays pending until that store's business " +
+      'approves. An owner can also set it up from the dashboard by naming ' +
+      '`requesterStoreId`; when both stores are theirs there is nobody else ' +
+      'to ask, so it is linked straight away.',
   })
   @Post()
   request(@Req() req: AuthedRequest, @Body() dto: RequestStoreLinkDto) {
     const user = req.user!;
-    if (user.sub_type !== 'staff' || !user.storeId) {
-      throw new Error('Store link requests come from a workstation session');
+    const requesterStoreId =
+      user.sub_type === 'staff' ? user.storeId : dto.requesterStoreId;
+    if (!requesterStoreId) {
+      throw new BadRequestException(
+        'Name the store that will help run the orders (requesterStoreId)',
+      );
     }
-    return this.service.request(user.businessId, user.storeId, dto, user.sub);
+    return this.service.request(
+      user.businessId,
+      requesterStoreId,
+      dto,
+      user.sub_type === 'staff' ? user.sub : undefined,
+    );
   }
 
   @ApiOperation({ summary: 'Approve or decline a request to your store' })

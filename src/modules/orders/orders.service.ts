@@ -1299,7 +1299,7 @@ export class OrdersService {
       actorId: actor.sub,
       actorName: actor.actorName ?? 'Unknown',
       action: `order.${dto.status}`,
-      businessId: actor.businessId,
+      businessId: order.businessId,
       storeId: order.storeId,
       resourceType: 'order',
       resourceId: order.id,
@@ -1382,7 +1382,7 @@ export class OrdersService {
       actorId: actor.sub,
       actorName: actor.actorName ?? 'Unknown',
       action: 'order.sent_to_kitchen',
-      businessId: actor.businessId,
+      businessId: order.businessId,
       storeId: order.storeId,
       resourceType: 'order',
       resourceId: order.id,
@@ -1538,7 +1538,7 @@ export class OrdersService {
       actorId: actor.sub,
       actorName: actor.actorName ?? 'Unknown',
       action: 'order.cancelled',
-      businessId: actor.businessId,
+      businessId: order.businessId,
       storeId: order.storeId,
       resourceType: 'order',
       resourceId: order.id,
@@ -1786,9 +1786,14 @@ export class OrdersService {
         await this.consumeIngredientsForOrder(m, order, actor);
       }
 
+      // The ORDER's business, not the cashier's. When a workstation is helping
+      // run a linked store's orders, the actor belongs to another business
+      // entirely: booking the money under them put a row in the helper's
+      // ledger against a store it does not own, and lost the sale from the
+      // owner's books. Everything an order produces belongs to the order.
       await this.ledger.record(
         {
-          businessId: actor.businessId,
+          businessId: order.businessId,
           storeId: order.storeId,
           type: 'credit',
           purpose: 'order_payment',
@@ -1845,7 +1850,7 @@ export class OrdersService {
       actorId: actor.sub,
       actorName: actor.actorName ?? 'Unknown',
       action: 'order.payment_recorded',
-      businessId: actor.businessId,
+      businessId: order.businessId,
       storeId: order.storeId,
       resourceType: 'order',
       resourceId: order.id,
@@ -1899,7 +1904,7 @@ export class OrdersService {
 
       await this.ledger.record(
         {
-          businessId: actor.businessId,
+          businessId: order.businessId,
           storeId: order.storeId,
           type: 'debit',
           purpose: 'order_refund',
@@ -1949,7 +1954,7 @@ export class OrdersService {
       actorId: actor.sub,
       actorName: actor.actorName ?? 'Unknown',
       action: 'order.refunded',
-      businessId: actor.businessId,
+      businessId: order.businessId,
       storeId: order.storeId,
       resourceType: 'order',
       resourceId: order.id,
@@ -2007,7 +2012,7 @@ export class OrdersService {
       actorId: actor.sub,
       actorName: actor.actorName ?? 'Unknown',
       action: 'order.item_prep_updated',
-      businessId: actor.businessId,
+      businessId: order.businessId,
       storeId: order.storeId,
       resourceType: 'order',
       resourceId: order.id,

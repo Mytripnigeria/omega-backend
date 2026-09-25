@@ -19,6 +19,7 @@ import { DeliveryResponseDto } from './dto/delivery-response.dto';
 import { PaginatedResponseDto, paginate } from '../../common/dto/pagination.dto';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { OrdersService } from '../orders/orders.service';
+import { StoreLinksService } from '../store-links/store-links.service';
 import { endOfDayFilter, startOfDayFilter } from '../../common/utils/date-range';
 
 interface ActorContext {
@@ -54,12 +55,20 @@ export class DeliveriesService {
     private readonly staffRepo: Repository<StaffEntity>,
     private readonly activityLog: ActivityLogService,
     private readonly ordersService: OrdersService,
+    private readonly storeLinks: StoreLinksService,
   ) {}
 
   async create(actor: ActorContext, dto: CreateDeliveryDto): Promise<DeliveryResponseDto> {
     const order = await this.orderRepo.findOne({ where: { id: dto.orderId } });
     if (!order) throw new NotFoundException(`Order ${dto.orderId} not found`);
-    if (order.businessId !== actor.businessId) {
+    // Staff may raise a delivery for any store they help run; an owner stays
+    // inside their own business.
+    if (actor.sub_type === 'staff' && actor.storeId) {
+      const visible = await this.storeLinks.accessibleStoreIds(actor.storeId);
+      if (!visible.includes(order.storeId)) {
+        throw new ForbiddenException('Order belongs to another store');
+      }
+    } else if (order.businessId !== actor.businessId) {
       throw new ForbiddenException('Order belongs to another business');
     }
 
@@ -113,14 +122,22 @@ export class DeliveriesService {
       .createQueryBuilder('d')
       .leftJoinAndSelect('d.order', 'order')
       .leftJoinAndSelect('order.items', 'orderItems')
-      .where('d.businessId = :businessId', { businessId: actor.businessId })
       .orderBy('d.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
+    // Staff are scoped by the store filter below, which includes stores that
+    // approved a link; everyone else stays inside their own business. A linked
+    // store usually belongs to ANOTHER business, so a business filter here
+    // would hide exactly the deliveries the workstation was asked to run.
+    if (actor.sub_type !== 'staff') {
+      qb.andWhere('d.businessId = :businessId', { businessId: actor.businessId });
+    }
+
     if (filter.storeId) qb.andWhere('d.storeId = :storeId', { storeId: filter.storeId });
     if (actor.sub_type === 'staff' && actor.storeId) {
-      qb.andWhere('d.storeId = :scopedStore', { scopedStore: actor.storeId });
+      const visible = await this.storeLinks.accessibleStoreIds(actor.storeId);
+      qb.andWhere('d.storeId IN (:...visibleStores)', { visibleStores: visible });
     }
     if (filter.riderStaffId) qb.andWhere('d.riderStaffId = :rid', { rid: filter.riderStaffId });
 
@@ -156,15 +173,18 @@ export class DeliveriesService {
       relations: ['order', 'order.items'],
     });
     if (!delivery) throw new NotFoundException(`Delivery ${id} not found`);
+    // A workstation may run deliveries for its own store and for any store
+    // that approved a link — the same rule the orders themselves follow, so a
+    // linked order cannot be cooked here but dispatched nowhere.
+    if (actor.sub_type === 'staff' && actor.storeId) {
+      const visible = await this.storeLinks.accessibleStoreIds(actor.storeId);
+      if (!visible.includes(delivery.storeId)) {
+        throw new ForbiddenException('Delivery belongs to another store');
+      }
+      return delivery;
+    }
     if (delivery.businessId !== actor.businessId) {
       throw new ForbiddenException('Delivery belongs to another business');
-    }
-    if (
-      actor.sub_type === 'staff' &&
-      actor.storeId &&
-      delivery.storeId !== actor.storeId
-    ) {
-      throw new ForbiddenException('Delivery belongs to another store');
     }
     return delivery;
   }

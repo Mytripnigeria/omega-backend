@@ -10,6 +10,17 @@ export class RequestStoreLinkDto {
   @IsUUID()
   targetStoreId: string;
 
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Which of your stores will help run those orders. A workstation leaves ' +
+      'this out — it is the store that is signed in. An owner setting the ' +
+      'link up from the dashboard has to say which store they mean.',
+  })
+  @IsOptional()
+  @IsUUID()
+  requesterStoreId?: string;
+
   @ApiPropertyOptional({ maxLength: 200 })
   @IsOptional()
   @IsString()

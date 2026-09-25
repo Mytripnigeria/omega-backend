@@ -92,6 +92,19 @@ export class StoreLinksService {
     return this.present(rows);
   }
 
+  /**
+   * Every link this business's stores have asked for, whichever store it was.
+   * The dashboard manages all of a merchant's stores at once, so it cannot ask
+   * store by store the way a workstation does.
+   */
+  async listOutgoingForBusiness(businessId: string) {
+    const rows = await this.repo.find({
+      where: { requesterBusinessId: businessId },
+      order: { createdAt: 'DESC' },
+    });
+    return this.present(rows);
+  }
+
   /** Requests other stores have made against this business's stores. */
   async listIncoming(businessId: string) {
     const rows = await this.repo.find({
@@ -110,10 +123,24 @@ export class StoreLinksService {
     if (dto.targetStoreId === requesterStoreId) {
       throw new BadRequestException('A store cannot link to itself');
     }
+    // The requesting store must be one of the caller's own. A workstation's
+    // store comes from its token, but an owner naming a store from the
+    // dashboard could otherwise volunteer somebody else's.
+    const requester = await this.storeRepo.findOne({
+      where: { id: requesterStoreId, businessId: requesterBusinessId },
+    });
+    if (!requester) {
+      throw new NotFoundException('That store is not one of yours');
+    }
     const target = await this.storeRepo.findOne({
       where: { id: dto.targetStoreId },
     });
     if (!target) throw new NotFoundException('No store with that id');
+
+    // Both stores belong to the same merchant: they are the only party whose
+    // approval matters, and they have just given it by asking. Leaving it
+    // pending would mean approving your own request from another screen.
+    const ownBothSides = target.businessId === requesterBusinessId;
 
     const existing = await this.repo.findOne({
       where: { requesterStoreId, targetStoreId: dto.targetStoreId },
@@ -126,10 +153,12 @@ export class StoreLinksService {
         throw new ConflictException('This store is already linked');
       }
       // A previously declined or revoked link may be asked for again.
-      existing.status = StoreLinkStatus.PENDING;
+      existing.status = ownBothSides
+        ? StoreLinkStatus.APPROVED
+        : StoreLinkStatus.PENDING;
       existing.message = dto.message ?? null;
       existing.requestedByStaffId = requestedByStaffId ?? null;
-      existing.respondedAt = null;
+      existing.respondedAt = ownBothSides ? new Date() : null;
       const saved = await this.repo.save(existing);
       return (await this.present([saved]))[0];
     }
@@ -140,17 +169,20 @@ export class StoreLinksService {
         requesterBusinessId,
         targetStoreId: target.id,
         targetBusinessId: target.businessId,
-        status: StoreLinkStatus.PENDING,
+        status: ownBothSides
+          ? StoreLinkStatus.APPROVED
+          : StoreLinkStatus.PENDING,
         message: dto.message ?? null,
         requestedByStaffId: requestedByStaffId ?? null,
+        respondedAt: ownBothSides ? new Date() : null,
       }),
     );
 
     this.activityLog.record({
-      actorType: 'staff',
+      actorType: requestedByStaffId ? 'staff' : 'admin',
       actorId: requestedByStaffId ?? saved.id,
-      actorName: 'Workstation',
-      action: 'store_link.requested',
+      actorName: requestedByStaffId ? 'Workstation' : 'Owner',
+      action: ownBothSides ? 'store_link.approved' : 'store_link.requested',
       businessId: requesterBusinessId,
       storeId: requesterStoreId,
       resourceType: 'store_link',

@@ -30,6 +30,108 @@ describe('StoreLinksService', () => {
     return { service, repo, activityLog };
   };
 
+  /**
+   * Round-14: the client could not set linking up at all. A merchant with
+   * several branches has nobody to ask but themselves, and the owner works
+   * from the dashboard, not from a workstation.
+   */
+  describe('a merchant linking their own branches', () => {
+    const sisterStore = { id: 'store-c', businessId: 'biz-a', name: 'Yaba branch' };
+
+    const buildOwn = (links: Record<string, unknown>[] = []) => {
+      const repo = mockRepo<Record<string, any>>(links);
+      const storeRepo = mockRepo<Record<string, any>>([
+        ownStore,
+        otherStore,
+        sisterStore,
+      ]);
+      const service = new StoreLinksService(
+        repo as never,
+        storeRepo as never,
+        { record: jest.fn() } as never,
+      );
+      return { service, repo };
+    };
+
+    it('links two of their own branches straight away', async () => {
+      const { service, repo } = buildOwn();
+
+      const res = await service.request('biz-a', 'store-a', {
+        targetStoreId: 'store-c',
+      } as never);
+
+      // Nobody else's approval is involved, so leaving it pending would mean
+      // approving your own request from another screen.
+      expect(res.status).toBe(StoreLinkStatus.APPROVED);
+      expect(res.respondedAt).not.toBeNull();
+      expect(await service.accessibleStoreIds('store-a')).toEqual([
+        'store-a',
+        'store-c',
+      ]);
+      expect(repo.rows[0]).toMatchObject({ targetBusinessId: 'biz-a' });
+    });
+
+    it('still waits for the other merchant when the store is not theirs', async () => {
+      const { service } = buildOwn();
+
+      const res = await service.request('biz-a', 'store-a', {
+        targetStoreId: 'store-b',
+      } as never);
+
+      expect(res.status).toBe(StoreLinkStatus.PENDING);
+      expect(await service.accessibleStoreIds('store-a')).toEqual(['store-a']);
+    });
+
+    it('re-links a branch that was unlinked earlier without a second approval', async () => {
+      const { service } = buildOwn([
+        {
+          id: 'link-old',
+          requesterStoreId: 'store-a',
+          requesterBusinessId: 'biz-a',
+          targetStoreId: 'store-c',
+          targetBusinessId: 'biz-a',
+          status: StoreLinkStatus.REVOKED,
+          createdAt: new Date(),
+        },
+      ]);
+
+      const res = await service.request('biz-a', 'store-a', {
+        targetStoreId: 'store-c',
+      } as never);
+
+      expect(res.status).toBe(StoreLinkStatus.APPROVED);
+    });
+
+    it('refuses to volunteer a store the caller does not own', async () => {
+      const { service } = buildOwn();
+
+      // An owner names the helping store themselves, so it has to be checked.
+      await expect(
+        service.request('biz-a', 'store-b', { targetStoreId: 'store-c' } as never),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('lists every link the business has asked for, across its stores', async () => {
+      const { service } = buildOwn([
+        {
+          id: 'l1', requesterStoreId: 'store-a', requesterBusinessId: 'biz-a',
+          targetStoreId: 'store-c', targetBusinessId: 'biz-a',
+          status: StoreLinkStatus.APPROVED, createdAt: new Date(),
+        },
+        {
+          id: 'l2', requesterStoreId: 'store-c', requesterBusinessId: 'biz-a',
+          targetStoreId: 'store-b', targetBusinessId: 'biz-b',
+          status: StoreLinkStatus.PENDING, createdAt: new Date(),
+        },
+      ]);
+
+      const rows = await service.listOutgoingForBusiness('biz-a');
+
+      expect(rows.map((r) => r.id).sort()).toEqual(['l1', 'l2']);
+      expect(rows.find((r) => r.id === 'l1')?.targetStoreName).toBe('Yaba branch');
+    });
+  });
+
   describe('request', () => {
     it('creates a pending request against the target store', async () => {
       const { service, repo } = build();
