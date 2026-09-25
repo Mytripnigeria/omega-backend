@@ -203,10 +203,16 @@ export class AddOnGroupsService {
     if (min != null && min < 0) {
       throw new BadRequestException('minSelection cannot be negative');
     }
-    if (min != null && max != null && min > max) {
+    // A maximum of 0 means "no limit" — that is what this API documents, what
+    // the dashboard shows the merchant ("No limit") and how the storefront
+    // reads it. Comparing against it as if it were a real cap refused a
+    // perfectly ordinary group: "choose at least one sauce, as many as you
+    // like".
+    const cap = max != null && max > 0 ? max : null;
+    if (min != null && cap != null && min > cap) {
       throw new BadRequestException('minSelection cannot exceed maxSelection');
     }
-    if (max != null && max > addonsCount) {
+    if (cap != null && cap > addonsCount) {
       throw new BadRequestException('maxSelection exceeds available add-ons');
     }
   }

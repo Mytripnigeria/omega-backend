@@ -1027,10 +1027,22 @@ export class StorefrontOrdersService {
         // the persisted total (and the Paystack charge) can't be tampered
         // with — the client snapshot only supplies which add-ons were chosen.
         let addonsSnapshot = i.addons ?? null;
+        // Add-ons are matched against the product's own groups and priced from
+        // them, so a tampered payload can neither invent an add-on nor set its
+        // price. The group's own rules are checked here too: they are the
+        // merchant's settings, and until now they were only ever applied in the
+        // browser — which matters more since a group may legitimately take
+        // several add-ons.
+        const chosenPerGroup = new Map<string, number>();
         if (i.addons?.length) {
+          const groupOf = new Map<string, string>();
+          for (const g of p.addonGroups ?? []) {
+            for (const a of g.addons ?? []) groupOf.set(a.id, g.id);
+          }
           const productAddons = (p.addonGroups ?? []).flatMap(
             (g) => g.addons ?? [],
           );
+          const seen = new Set<string>();
           addonsSnapshot = i.addons.map((raw) => {
             const rawId = typeof raw.id === 'string' ? raw.id : undefined;
             const rawName =
@@ -1043,10 +1055,48 @@ export class StorefrontOrdersService {
               throw new BadRequestException(
                 `Add-on "${rawName ?? rawId ?? 'unknown'}" is not valid for "${p.name}"`,
               );
+            // The same add-on twice would be charged twice and read oddly on
+            // the kitchen ticket; quantity belongs on the line, not here.
+            if (seen.has(match.id))
+              throw new BadRequestException(
+                `Add-on "${match.name}" was sent more than once for "${p.name}"`,
+              );
+            seen.add(match.id);
+            const groupId = groupOf.get(match.id);
+            if (groupId)
+              chosenPerGroup.set(groupId, (chosenPerGroup.get(groupId) ?? 0) + 1);
             const addonPrice = Number(match.price ?? 0);
             unitPrice += addonPrice;
             return { ...raw, id: match.id, name: match.name, price: addonPrice };
           });
+        }
+        for (const g of p.addonGroups ?? []) {
+          // Only add-ons the customer could actually have picked count: the
+          // storefront hides unavailable ones, so a group whose add-ons are
+          // all sold out must not block the sale.
+          const offerable = (g.addons ?? []).filter(
+            (a) => a.isAvailable !== false,
+          );
+          if (!offerable.length) continue;
+          const picked = chosenPerGroup.get(g.id) ?? 0;
+          // A minimum larger than what is in stock cannot be met; that is the
+          // merchant's configuration to fix, not a reason to refuse an order.
+          const min = Math.min(Number(g.minSelection ?? 0), offerable.length);
+          // 0 (or null) means no limit — the same reading the dashboard shows
+          // the merchant and the storefront now uses.
+          const max = Number(g.maxSelection ?? 0);
+          if (min > 0 && picked < min) {
+            throw new BadRequestException(
+              min === 1
+                ? `Choose an option from "${g.name}" for "${p.name}"`
+                : `Choose at least ${min} from "${g.name}" for "${p.name}"`,
+            );
+          }
+          if (max > 0 && picked > max) {
+            throw new BadRequestException(
+              `At most ${max} may be chosen from "${g.name}" for "${p.name}"`,
+            );
+          }
         }
         if (stock === 0)
           throw new BadRequestException(
